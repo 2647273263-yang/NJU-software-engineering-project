@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forge-coding-agent"
+version = "0.1.0"
+description = "A small, inspectable local coding agent built from scratch"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi>=0.115",
+  "openai>=1.0",
+  "pathspec>=0.12",
+  "platformdirs>=4.0",
+  "pydantic>=2.8",
+  "pywinpty>=2.0; sys_platform == 'win32'",
+  "rich>=13.7",
+  "typer>=0.12",
+  "uvicorn[standard]>=0.32",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27",
+  "mypy>=1.11",
+  "pre-commit>=3.8",
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+forge = "forge_agent.cli:app"
+forge-gui = "forge_agent.gui.app:run_gui"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/forge_agent"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/forge_agent/gui/static" = "forge_agent/gui/static"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["forge_agent"]

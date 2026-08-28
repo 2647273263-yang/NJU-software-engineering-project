@@ -30,4 +30,4 @@ else {
 Invoke-ForgeGit branch -M $Branch
 Invoke-ForgeGit push -u origin $Branch
 Invoke-ForgeGit log --oneline
-Write-Output "已推送到 $Remote ($Branch)。此后不要改写已推送的提交。"
+Write-Output "Pushed to $Remote ($Branch). Do not rewrite pushed commits."

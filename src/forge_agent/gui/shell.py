@@ -42,12 +42,6 @@ class LiveTerminal:
         self._rows = 24
 
     async def close(self) -> None:
-        reader = self._reader
-        self._reader = None
-        if reader is not None:
-            reader.cancel()
-            with suppress(asyncio.CancelledError):
-                await reader
         proc = self._proc
         self._proc = None
         if proc is not None:
@@ -59,9 +53,17 @@ class LiveTerminal:
         child = self._unix_child
         self._unix_child = None
         if child is not None and child.returncode is None:
-            child.kill()
             with suppress(ProcessLookupError, OSError):
-                await child.wait()
+                child.kill()
+        reader = self._reader
+        self._reader = None
+        if reader is not None:
+            reader.cancel()
+            with suppress(asyncio.CancelledError, TimeoutError, Exception):
+                await asyncio.wait_for(reader, timeout=0.8)
+        if child is not None:
+            with suppress(ProcessLookupError, OSError, TimeoutError):
+                await asyncio.wait_for(child.wait(), timeout=0.5)
         fd = self._fd
         self._fd = None
         if fd is not None:
@@ -89,7 +91,7 @@ class LiveTerminal:
             while True:
                 incoming = await websocket.receive_text()
                 self._handle_input(incoming)
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, ConnectionResetError, ConnectionAbortedError, OSError):
             pass
         finally:
             sender.cancel()
@@ -254,7 +256,7 @@ async def _pump_queue(queue: asyncio.Queue[str], websocket: WebSocket) -> None:
         while True:
             chunk = await queue.get()
             await websocket.send_text(chunk)
-    except (WebSocketDisconnect, Exception):
+    except (WebSocketDisconnect, ConnectionResetError, ConnectionAbortedError, OSError, Exception):
         return
 
 

@@ -142,6 +142,85 @@ export const api = {
         body: JSON.stringify({ workspace, path }),
       }),
     ),
+  gitStatus: (workspace: string) =>
+    parse<GitSnapshot>(fetch(`/api/workspace/git?workspace=${encodeURIComponent(workspace)}`)),
+  gitInit: (workspace: string) =>
+    parse<GitSnapshot>(
+      fetch("/api/workspace/git/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace }),
+      }),
+    ),
+  gitCommit: (workspace: string, message: string) =>
+    parse<GitSnapshot>(
+      fetch("/api/workspace/git/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, message }),
+      }),
+    ),
+  gitBranch: (workspace: string, name: string) =>
+    parse<GitSnapshot>(
+      fetch("/api/workspace/git/branch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, name }),
+      }),
+    ),
+  gitCheckout: (workspace: string, name: string) =>
+    parse<GitSnapshot>(
+      fetch("/api/workspace/git/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, name }),
+      }),
+    ),
+  gitRestore: (workspace: string, commit: string, confirm: boolean) =>
+    parse<GitSnapshot>(
+      fetch("/api/workspace/git/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, commit, confirm, clean_untracked: true }),
+      }),
+    ),
+  gitRemote: (workspace: string, url: string) =>
+    parse<GitSnapshot>(
+      fetch("/api/workspace/git/remote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, url }),
+      }),
+    ),
+  gitPush: (workspace: string) =>
+    parse<GitSnapshot>(
+      fetch("/api/workspace/git/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace }),
+      }),
+    ),
+};
+
+export type GitSnapshot = {
+  available: boolean;
+  git_path: string | null;
+  repo: boolean;
+  reason: string;
+  branch: string;
+  branches: string[];
+  commits: { sha: string; short: string; author: string; when: string; message: string }[];
+  dirty: { path: string; kind: string }[];
+  remote_url: string;
+  branch_nodes: {
+    name: string;
+    parent: string;
+    depth: number;
+    current: boolean;
+    same_version: boolean;
+    ahead: number;
+    label: string;
+  }[];
 };
 
 export type { PendingApproval };

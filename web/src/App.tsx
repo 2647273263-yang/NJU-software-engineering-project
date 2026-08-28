@@ -38,6 +38,7 @@ import { Button } from "./components/ui/button";
 import { CodeEditor } from "./components/CodeEditor";
 import { EvidencePanel } from "./components/EvidencePanel";
 import { FileTree, flattenFiles } from "./components/FileTree";
+import { GitPanel } from "./components/GitPanel";
 import { InspectorWorkspace, type InspectorHandle, type InspectorPage } from "./components/InspectorWorkspace";
 import { ProcessGroup } from "./components/ProcessGroup";
 import { SplitHandle } from "./components/SplitHandle";
@@ -140,16 +141,19 @@ function shortPath(path: string): string {
 function collectChangedFiles(
   events: SessionEvent[],
 ): { path: string; diff: string | null; added: number; deleted: number }[] {
-  const map = new Map<string, string | null>();
+  const map = new Map<string, string>();
   for (const event of events) {
-    const path = event.view.path?.replaceAll("\\", "/");
-    if (path) map.set(path, event.view.diff ?? map.get(path) ?? null);
     const diff = event.view.diff;
     if (!diff) continue;
-    const match = diff.match(/^\+\+\+ [ab]\/(.+)$/m);
-    if (match?.[1] && match[1] !== "/dev/null") {
-      map.set(match[1], diff);
-    }
+    const stats = diffStats(diff);
+    if (stats.added === 0 && stats.deleted === 0) continue;
+    const fromHeader = diff.match(/^\+\+\+ [ab]\/(.+)$/m)?.[1];
+    const path =
+      fromHeader && fromHeader !== "/dev/null"
+        ? fromHeader
+        : event.view.path?.replaceAll("\\", "/");
+    if (!path) continue;
+    map.set(path, diff);
   }
   return [...map.entries()].map(([path, diff]) => ({ path, diff, ...diffStats(diff) }));
 }
@@ -334,6 +338,13 @@ export default function App() {
       setTree(data.tree);
     } catch {
       setTree([]);
+    }
+  }
+
+  async function refreshAfterGit() {
+    await refreshTree();
+    for (const tab of tabsRef.current) {
+      await syncTabFromDisk(tab.path);
     }
   }
 
@@ -1338,6 +1349,9 @@ export default function App() {
               </div>
             </div>
             );
+            if (page.kind === "git") {
+              return <GitPanel workspace={settings.workspace} onChanged={() => void refreshAfterGit()} />;
+            }
             if (page.kind === "evidence") return <EvidencePanel claims={claims} />;
             if (page.kind === "context") return (
             <div className="h-full overflow-y-auto px-3 py-2 text-[12.5px]">

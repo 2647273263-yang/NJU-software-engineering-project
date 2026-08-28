@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,17 @@ from forge_agent.application import ApplicationEvent, EventBus, SessionService
 from forge_agent.config import RunConfig
 from forge_agent.gui.shell import LiveTerminal, get_terminal, run_terminal_command
 from forge_agent.gui.viewmodels import event_to_view, view_to_dict
+from forge_agent.gui.workspace_git import (
+    GitWorkspaceError,
+    git_commit,
+    git_create_branch,
+    git_init,
+    git_push,
+    git_restore,
+    git_set_remote,
+    git_snapshot,
+    git_switch_branch,
+)
 from forge_agent.gui.workspace_ops import (
     apply_session_settings,
     create_workspace_file,
@@ -117,6 +129,32 @@ class UndoBody(BaseModel):
     workspace: str = ""
 
 
+class GitWorkspaceBody(BaseModel):
+    workspace: str
+
+
+class GitCommitBody(BaseModel):
+    workspace: str
+    message: str = Field(min_length=1)
+
+
+class GitBranchBody(BaseModel):
+    workspace: str
+    name: str = Field(min_length=1)
+
+
+class GitRestoreBody(BaseModel):
+    workspace: str
+    commit: str = Field(min_length=7)
+    confirm: bool = False
+    clean_untracked: bool = True
+
+
+class GitRemoteBody(BaseModel):
+    workspace: str
+    url: str = Field(min_length=1)
+
+
 class ApprovalBody(BaseModel):
     approved: bool
     remember_for_session: bool = False
@@ -132,9 +170,15 @@ class GuiRuntime:
     shells: dict[str, LiveTerminal] = field(default_factory=dict)
 
     async def close_shells(self) -> None:
-        for shell in list(self.shells.values()):
-            await shell.close()
+        shells = list(self.shells.values())
         self.shells.clear()
+        if not shells:
+            return
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(
+                asyncio.gather(*(shell.close() for shell in shells), return_exceptions=True),
+                timeout=2,
+            )
 
     def workspace_of(self, session_id: str) -> Path | None:
         with SQLiteStorage(self.database_path) as storage:
@@ -309,6 +353,13 @@ async def _event_pump(runtime: GuiRuntime, queue: asyncio.Queue[ApplicationEvent
             runtime.clients.discard(websocket)
 
 
+def _silence_win_disconnect(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+    exc = context.get("exception")
+    if isinstance(exc, ConnectionResetError | ConnectionAbortedError | BrokenPipeError):
+        return
+    loop.default_exception_handler(context)
+
+
 def _error(status: int, detail: str) -> HTTPException:
     return HTTPException(status_code=status, detail=detail)
 
@@ -330,14 +381,17 @@ def create_app(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         queue = runtime.events.subscribe()
         pump = asyncio.create_task(_event_pump(runtime, queue), name="forge-gui-events")
+        if sys.platform == "win32":
+            asyncio.get_running_loop().set_exception_handler(_silence_win_disconnect)
         try:
             yield
         finally:
             pump.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pump
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(pump, timeout=0.5)
             runtime.events.unsubscribe(queue)
-            await runtime.close_shells()
+            with contextlib.suppress(TimeoutError, Exception):
+                await asyncio.wait_for(runtime.close_shells(), timeout=2)
 
     app = FastAPI(
         title="ForgeAgent",
@@ -601,6 +655,67 @@ def create_app(
         except (ValueError, OSError, FileNotFoundError) as exc:
             raise _error(400, str(exc)) from exc
 
+    @app.get("/api/workspace/git")
+    def get_git(workspace: str) -> dict[str, Any]:
+        try:
+            return git_snapshot(Path(workspace))
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/git/init")
+    def init_git(body: GitWorkspaceBody) -> dict[str, Any]:
+        try:
+            return git_init(Path(body.workspace))
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/git/commit")
+    def commit_git(body: GitCommitBody) -> dict[str, Any]:
+        try:
+            return git_commit(Path(body.workspace), body.message)
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/git/branch")
+    def create_git_branch(body: GitBranchBody) -> dict[str, Any]:
+        try:
+            return git_create_branch(Path(body.workspace), body.name)
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/git/checkout")
+    def checkout_git_branch(body: GitBranchBody) -> dict[str, Any]:
+        try:
+            return git_switch_branch(Path(body.workspace), body.name)
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/git/restore")
+    def restore_git(body: GitRestoreBody) -> dict[str, Any]:
+        try:
+            return git_restore(
+                Path(body.workspace),
+                body.commit,
+                confirm=body.confirm,
+                clean_untracked=body.clean_untracked,
+            )
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/git/remote")
+    def set_git_remote(body: GitRemoteBody) -> dict[str, Any]:
+        try:
+            return git_set_remote(Path(body.workspace), body.url)
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/git/push")
+    def push_git(body: GitWorkspaceBody) -> dict[str, Any]:
+        try:
+            return git_push(Path(body.workspace))
+        except (GitWorkspaceError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
     @app.post("/api/workspace/terminal")
     async def terminal(body: TerminalBody) -> dict[str, Any]:
         try:
@@ -650,7 +765,7 @@ def create_app(
                 message = await websocket.receive_json()
                 if isinstance(message, dict) and "demo" in message:
                     runtime.client_demo[websocket] = bool(message["demo"])
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, ConnectionResetError, ConnectionAbortedError, OSError):
             pass
         finally:
             runtime.clients.discard(websocket)

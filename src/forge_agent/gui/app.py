@@ -42,7 +42,13 @@ def run_gui(
                 log_level="info",
             )
             return
-        uvicorn.run(create_app(), host=host, port=port, log_level="info")
+        uvicorn.run(
+            create_app(),
+            host=host,
+            port=port,
+            log_level="info",
+            timeout_graceful_shutdown=2,
+        )
 
 
 if __name__ in {"__main__", "__mp_main__"}:

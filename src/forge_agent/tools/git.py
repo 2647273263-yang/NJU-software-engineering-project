@@ -3,33 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
 from pathlib import Path
 from typing import Any
 
+from forge_agent.gitbin import resolve_git_executable
 from forge_agent.tools.schemas import GitDiffArgs, GitStatusArgs
 from forge_agent.tools.workspace import WorkspaceSandbox
 from forge_agent.types import ToolResult
 
 
 def _resolve_git() -> str | None:
-    found = shutil.which("git")
-    if found:
-        return found
-    program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
-    program_files_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
-    local = os.environ.get("LOCALAPPDATA", "")
-    candidates = [
-        Path(program_files) / "Git" / "cmd" / "git.exe",
-        Path(program_files) / "Git" / "bin" / "git.exe",
-        Path(program_files_x86) / "Git" / "cmd" / "git.exe",
-        Path(local) / "Programs" / "Git" / "cmd" / "git.exe" if local else None,
-    ]
-    for candidate in candidates:
-        if candidate is not None and candidate.is_file():
-            return str(candidate)
-    return None
+    return resolve_git_executable()
 
 
 class GitTools:

@@ -1,5 +1,7 @@
 # ForgeAgent
 
+This repository is the Nanjing University School of Software postgraduate-recommendation interview project (`NJU-software-engineering-project`).
+
 ForgeAgent is a small, inspectable local coding agent implemented from scratch. It communicates
 with an OpenAI-compatible model, lets the model call locally executed structured tools, and runs
 an explicit model → action → observation loop until the task is completed or a deterministic

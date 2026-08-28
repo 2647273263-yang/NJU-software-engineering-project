@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 8%;
+  --foreground: 0 0% 93%;
+  --card: 0 0% 10%;
+  --card-foreground: 0 0% 93%;
+  --primary: 217 91% 70%;
+  --primary-foreground: 0 0% 8%;
+  --secondary: 0 0% 14%;
+  --secondary-foreground: 0 0% 86%;
+  --muted: 0 0% 14%;
+  --muted-foreground: 0 0% 55%;
+  --accent: 0 0% 16%;
+  --accent-foreground: 0 0% 93%;
+  --destructive: 0 72% 61%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 18%;
+  --input: 0 0% 18%;
+  --ring: 217 91% 70%;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  font-family: "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.prose-forge {
+  @apply text-[13.5px] leading-6 text-foreground;
+}
+
+.prose-forge h1,
+.prose-forge h2,
+.prose-forge h3 {
+  @apply font-semibold text-foreground mt-4 mb-2;
+}
+
+.prose-forge h1 {
+  @apply text-lg;
+}
+
+.prose-forge h2 {
+  @apply text-base;
+}
+
+.prose-forge p {
+  @apply my-2;
+}
+
+.prose-forge ul,
+.prose-forge ol {
+  @apply my-2 pl-5;
+}
+
+.prose-forge li {
+  @apply my-0.5;
+}
+
+.prose-forge code {
+  @apply rounded bg-white/10 px-1 py-0.5 text-[12.5px];
+}
+
+.prose-forge pre {
+  @apply my-3 overflow-x-auto rounded-lg border border-border bg-black/30 p-3 text-[12.5px];
+}
+
+.prose-forge pre code {
+  @apply bg-transparent p-0;
+}
+
+.prose-forge a {
+  @apply text-primary underline-offset-2 hover:underline;
+}
+
+select option {
+  background-color: #1f1f1f;
+  color: #ececec;
+}
+
+.diff-line-add {
+  background: rgba(46, 160, 67, 0.18);
+  color: #3fb950;
+}
+
+.diff-line-del {
+  background: rgba(248, 81, 73, 0.16);
+  color: #ff7b72;
+}
+
+.workspace-terminal .xterm {
+  height: 100%;
+  padding: 8px 10px;
+}
+
+.workspace-terminal .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(0 0% 24%);
+  border-radius: 999px;
+}

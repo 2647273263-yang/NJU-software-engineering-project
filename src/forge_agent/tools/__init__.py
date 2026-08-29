@@ -10,6 +10,7 @@ from forge_agent.tools.git import GitTools
 from forge_agent.tools.registry import ToolRegistry, ToolSpec
 from forge_agent.tools.repo import RepoTools
 from forge_agent.tools.schemas import (
+    DeleteFileArgs,
     GitDiffArgs,
     GitStatusArgs,
     ListFilesArgs,
@@ -23,9 +24,14 @@ from forge_agent.tools.schemas import (
     VerifyChangesArgs,
     WriteFileArgs,
 )
-from forge_agent.tools.workspace import WorkspaceSandbox, WorkspaceViolation
+from forge_agent.tools.workspace import (
+    SensitivePathError,
+    WorkspaceSandbox,
+    WorkspaceViolation,
+)
 
 __all__ = [
+    "SensitivePathError",
     "ToolRegistry",
     "ToolSpec",
     "WorkspaceSandbox",
@@ -53,20 +59,31 @@ def build_default_registry(
     repo = RepoTools(sandbox, max_output_chars=max_output_chars)
     registry = ToolRegistry()
     specs = [
-        ToolSpec("read_file", "Read a UTF-8 workspace file.", ReadFileArgs, files.read_file),
+        ToolSpec(
+            "read_file",
+            "Read a UTF-8 workspace file. Secret files such as .env are blocked.",
+            ReadFileArgs,
+            files.read_file,
+        ),
         ToolSpec("list_files", "List files within the workspace.", ListFilesArgs, files.list_files),
         ToolSpec("search_text", "Search UTF-8 files for text.", SearchTextArgs, files.search_text),
         ToolSpec(
             "replace_in_file",
-            "Replace one unique text occurrence atomically.",
+            "Replace a specified number of exact text matches atomically. Defaults to one unique match.",
             ReplaceInFileArgs,
             files.replace_in_file,
         ),
         ToolSpec(
             "write_file",
-            "Atomically write a UTF-8 workspace file.",
+            "Atomically write a UTF-8 workspace file. Creates the file when it does not exist.",
             WriteFileArgs,
             files.write_file,
+        ),
+        ToolSpec(
+            "delete_file",
+            "Delete a UTF-8 workspace file. Undo restores the previous contents.",
+            DeleteFileArgs,
+            files.delete_file,
         ),
         ToolSpec(
             "undo_last_edit",

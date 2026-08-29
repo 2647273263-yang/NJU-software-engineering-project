@@ -54,6 +54,27 @@ def test_tool_titles_use_file_and_command_names() -> None:
     assert "+return 2" in view.diff
 
 
+def test_delete_file_finished_event_exposes_diff() -> None:
+    view = event_to_view(
+        event(
+            "tool_finished",
+            {
+                "name": "delete_file",
+                "ok": True,
+                "duration_ms": 4,
+                "summary": "deleted gone.py",
+                "content": "--- a/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-print(1)\n",
+                "metadata": {"changed_files": ["gone.py"], "deleted": True},
+                "arguments": {"path": "gone.py"},
+            },
+        )
+    )
+    assert view.title == "删除 gone.py 完成"
+    assert view.diff is not None
+    assert view.path == "gone.py"
+    assert "+++ /dev/null" in view.diff
+
+
 def test_demo_view_redacts_workspace_and_secret() -> None:
     workspace = Path("C:/Users/Example/private-project")  # forge-release: allow
     view = event_to_view(

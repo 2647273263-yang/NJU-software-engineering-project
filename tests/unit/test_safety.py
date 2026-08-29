@@ -7,12 +7,18 @@ def test_policy_classifies_read_write_and_destructive_command() -> None:
     read = policy.evaluate("read_file", {"path": "a.txt"})
     write = policy.evaluate("write_file", {"path": "a.txt"})
     destructive = policy.evaluate("run_command", {"command": "git reset --hard"})
+    removed = policy.evaluate(
+        "run_command",
+        {"command": "python -c \"import os; os.remove('a.py')\""},
+    )
 
     assert read.risk == RiskLevel.LOW
     assert not read.requires_approval
     assert write.risk == RiskLevel.MEDIUM
     assert write.requires_approval
     assert destructive.risk == RiskLevel.HIGH
+    assert removed.risk == RiskLevel.HIGH
+    assert not removed.allowed
 
 
 def test_policy_blocks_mutation_in_plan_mode_and_is_conservative() -> None:
@@ -23,6 +29,7 @@ def test_policy_blocks_mutation_in_plan_mode_and_is_conservative() -> None:
     assert not decision.allowed
     assert not decision.requires_approval
     assert unknown.risk == RiskLevel.HIGH
+    assert not PolicyEngine(mode=RunMode.PLAN).evaluate("delete_file", {"path": "a.txt"}).allowed
 
 
 def test_planning_pass_blocks_writes_without_calling_it_plan_mode() -> None:

@@ -40,6 +40,12 @@ class ReplaceInFileArgs(ToolArguments):
     path: str
     old_text: str = Field(min_length=1)
     new_text: str
+    expected_replacements: int = Field(
+        default=1,
+        ge=1,
+        le=10_000,
+        description="How many exact matches to replace. Defaults to 1 (unique match).",
+    )
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
 
 
@@ -48,6 +54,10 @@ class WriteFileArgs(ToolArguments):
     content: str
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     overwrite: bool = False
+
+
+class DeleteFileArgs(ToolArguments):
+    path: str
 
 
 class UndoLastEditArgs(ToolArguments):

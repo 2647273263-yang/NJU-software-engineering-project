@@ -223,3 +223,37 @@ def test_gui_session_json_export_and_import(tmp_path: Path) -> None:
         assert detail["session"]["task"] == "修登录"
         assert any(event["view"]["kind"] == "user_message" for event in detail["events"])
         assert detail["claims"][0]["statement"] == "登录可以跑"
+
+
+def test_accepted_diffs_persist_on_session(tmp_path: Path) -> None:
+    from forge_agent.storage import SQLiteStorage
+
+    database = tmp_path / "sessions.sqlite3"
+    with SQLiteStorage(database) as storage:
+        storage.create_session("sess-accept", {"task": "改排序", "workspace": str(tmp_path)})
+    app = create_app(database_path=database)
+    with TestClient(app) as client:
+        empty = client.get("/api/sessions/sess-accept").json()
+        assert empty["accepted_diffs"] == {}
+        saved = client.patch(
+            "/api/sessions/sess-accept/accepted-diffs",
+            json={"diffs": {"bubble_sort.py": "--- a/bubble_sort.py\n+++ b/bubble_sort.py\n"}},
+        )
+        assert saved.status_code == 200
+        assert "bubble_sort.py" in saved.json()["accepted_diffs"]
+        reloaded = client.get("/api/sessions/sess-accept").json()
+        assert reloaded["accepted_diffs"]["bubble_sort.py"].startswith("--- a/bubble_sort.py")
+        fingerprint = "bubble_sort.py::" + "b" * 64
+        saved = client.patch(
+            "/api/sessions/sess-accept/accepted-diffs",
+            json={"diffs": {"bubble_sort.py": fingerprint}},
+        )
+        assert saved.status_code == 200
+        client.patch(
+            "/api/sessions/sess-accept/settings",
+            json={"title": "排序", "mode": "build"},
+        )
+        after_settings = client.get("/api/sessions/sess-accept").json()
+        assert after_settings["accepted_diffs"]["bubble_sort.py"] == fingerprint
+        assert after_settings["session"]["task"] == "排序"
+

@@ -171,12 +171,13 @@ forge release-check .
 
 ## Built-in tools
 
-- `read_file`: read a bounded line range with line numbers, binary detection, and SHA-256.
+- `read_file`: read a bounded line range with line numbers, binary detection, SHA-256, and a default deny list for `.env`, private keys, credential directories, and `.git` internals.
 - `list_files`: list visible workspace entries while respecting `.gitignore`.
 - `search_text`: use ripgrep when available and a bounded Python fallback otherwise.
 - `repo_outline`: summarize languages, key paths, tests, configuration, and Python symbols.
-- `replace_in_file`: replace exactly one matching block atomically.
+- `replace_in_file`: replace a specified number of exact matches atomically (default: one unique match).
 - `write_file`: create or replace a file atomically with optional hash precondition.
+- `delete_file`: delete a UTF-8 workspace file; undo restores the previous contents.
 - `undo_last_edit`: restore the latest agent edit when no concurrent change is detected.
 - `run_command`: run a local command with timeout and bounded output.
 - `verify_changes`: run a test/lint/type/build command and record versioned evidence. The command

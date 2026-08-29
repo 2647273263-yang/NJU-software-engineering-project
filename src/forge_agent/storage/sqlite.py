@@ -223,6 +223,40 @@ class SQLiteStorage:
         assert record is not None
         return record
 
+    def patch_session_metadata(
+        self, session_id: str, fields: Mapping[str, Any]
+    ) -> SessionRecord:
+        """Merge fields into session metadata without replacing the whole JSON object."""
+
+        if not fields:
+            record = self.get_session(session_id)
+            if record is None:
+                raise KeyError(f"unknown session: {session_id}")
+            return record
+        expr = "metadata_json"
+        params: list[Any] = []
+        for key, value in fields.items():
+            if not str(key).isidentifier():
+                raise ValueError(f"invalid metadata key: {key}")
+            expr = f"json_set({expr}, ?, json(?))"
+            params.append(f"$.{key}")
+            params.append(json.dumps(value, ensure_ascii=False))
+        params.append(session_id)
+        cursor = self._connection.execute(
+            f"""
+            UPDATE sessions
+            SET metadata_json = {expr},
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            """,
+            params,
+        )
+        if cursor.rowcount != 1:
+            raise KeyError(f"unknown session: {session_id}")
+        record = self.get_session(session_id)
+        assert record is not None
+        return record
+
     def delete_session(self, session_id: str) -> None:
         cursor = self._connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         if cursor.rowcount != 1:

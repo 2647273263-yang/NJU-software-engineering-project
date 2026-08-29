@@ -254,3 +254,18 @@ def test_schema_migrates_existing_database_without_replacing_data(tmp_path) -> N
             )
         }
         assert tables == {"edit_transactions", "snapshots", "claims", "evidence"}
+
+
+def test_patch_session_metadata_keeps_sibling_keys(tmp_path) -> None:
+    database = tmp_path / "state.db"
+    with SQLiteStorage(database) as storage:
+        storage.create_session("session-1", {"task": "sort", "status": "thinking"})
+        storage.patch_session_metadata(
+            "session-1",
+            {"accepted_diffs": {"a.py": "a.py::abc"}},
+        )
+        storage.patch_session_metadata("session-1", {"status": "completed"})
+        meta = storage.get_session("session-1").metadata
+        assert meta["task"] == "sort"
+        assert meta["status"] == "completed"
+        assert meta["accepted_diffs"] == {"a.py": "a.py::abc"}

@@ -15,6 +15,7 @@ from pathlib import Path
 from pathspec import GitIgnoreSpec
 
 from forge_agent.tools.schemas import (
+    DeleteFileArgs,
     ListFilesArgs,
     ReadFileArgs,
     ReplaceInFileArgs,
@@ -121,14 +122,29 @@ def _looks_binary(data: bytes) -> bool:
     return control_bytes / len(sample) > 0.30
 
 
-def _diff(path: str, before: str, after: str, limit: int = 4_000) -> tuple[str, bool]:
-    lines = difflib.unified_diff(
-        before.splitlines(keepends=True),
-        after.splitlines(keepends=True),
-        fromfile=f"a/{path}",
-        tofile=f"b/{path}",
-        n=3,
+def _diff(
+    path: str,
+    before: str,
+    after: str,
+    limit: int = 4_000,
+    *,
+    created: bool = False,
+    deleted: bool = False,
+) -> tuple[str, bool]:
+    relative = path.replace("\\", "/")
+    fromfile = "/dev/null" if created else f"a/{relative}"
+    tofile = "/dev/null" if deleted else f"b/{relative}"
+    lines = list(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=fromfile,
+            tofile=tofile,
+            n=3,
+        )
     )
+    if not lines:
+        lines = [f"--- {fromfile}\n", f"+++ {tofile}\n"]
     return _truncate("".join(lines), limit)
 
 
@@ -151,6 +167,7 @@ class FileTools:
         path = self.sandbox.resolve(args.path, must_exist=True)
         if not path.is_file():
             raise IsADirectoryError(args.path)
+        self.sandbox.deny_sensitive_content(path)
         data = path.read_bytes()
         if _looks_binary(data):
             raise ValueError(f"binary file cannot be read as text: {args.path}")
@@ -213,6 +230,7 @@ class FileTools:
 
     def search_text(self, args: SearchTextArgs) -> ToolResult:
         base = self.sandbox.resolve(args.path, must_exist=True)
+        self.sandbox.deny_sensitive_content(base)
         matches = self._search_with_ripgrep(base, args)
         if matches is None:
             matches = self._search_with_python(base, args)
@@ -245,6 +263,8 @@ class FileTools:
                 continue
             relative = self.sandbox.relative(candidate)
             if is_ignored(self.sandbox, candidate, spec, is_dir=False):
+                continue
+            if self.sandbox.is_sensitive_content(candidate):
                 continue
             if args.glob and not Path(relative).match(args.glob):
                 continue
@@ -312,6 +332,8 @@ class FileTools:
                 continue
             if is_ignored(self.sandbox, candidate, spec, is_dir=False):
                 continue
+            if self.sandbox.is_sensitive_content(candidate):
+                continue
             matches.append(f"{relative}:{parts[1]}:{parts[2]}")
             if len(matches) > args.max_matches:
                 break
@@ -319,18 +341,25 @@ class FileTools:
 
     def replace_in_file(self, args: ReplaceInFileArgs) -> ToolResult:
         path = self.sandbox.resolve(args.path, must_exist=True)
+        self.sandbox.deny_sensitive_content(path)
         before = path.read_text(encoding="utf-8")
         self._check_hash(before, args.expected_sha256)
         count = before.count(args.old_text)
-        if count != 1:
-            raise ValueError(f"old_text must match exactly once; found {count}")
-        after = before.replace(args.old_text, args.new_text, 1)
+        expected = args.expected_replacements
+        if count != expected:
+            raise ValueError(
+                f"old_text must match exactly {expected} time(s); found {count}"
+            )
+        after = before.replace(args.old_text, args.new_text, expected)
         self.sandbox.atomic_write(path, after)
         self._record_snapshot(path, args.path, before, after, existed=True)
-        return self._write_result(args.path, before, after)
+        result = self._write_result(args.path, before, after)
+        result.metadata["replacements"] = expected
+        return result
 
     def write_file(self, args: WriteFileArgs) -> ToolResult:
         path = self.sandbox.resolve(args.path)
+        self.sandbox.deny_sensitive_content(path)
         existed = path.exists()
         if existed and not args.overwrite and args.expected_sha256 is None:
             raise FileExistsError(
@@ -340,7 +369,31 @@ class FileTools:
         self._check_hash(before, args.expected_sha256)
         self.sandbox.atomic_write(path, args.content)
         self._record_snapshot(path, args.path, before, args.content, existed=existed)
-        return self._write_result(args.path, before, args.content)
+        return self._write_result(args.path, before, args.content, created=not existed)
+
+    def delete_file(self, args: DeleteFileArgs) -> ToolResult:
+        path = self.sandbox.resolve(args.path, must_exist=True)
+        self.sandbox.deny_sensitive_content(path)
+        if not path.is_file():
+            raise IsADirectoryError(args.path)
+        data = path.read_bytes()
+        if _looks_binary(data):
+            raise ValueError(f"binary file cannot be deleted as text: {args.path}")
+        before = data.decode("utf-8")
+        self._record_snapshot(path, args.path, before, "", existed=True)
+        path.unlink()
+        diff, truncated = _diff(args.path, before, "", deleted=True)
+        return ToolResult(
+            ok=True,
+            summary=f"deleted {args.path}",
+            content=diff,
+            truncated=truncated,
+            metadata={
+                "previous_sha256": sha256_text(before),
+                "changed_files": [args.path],
+                "deleted": True,
+            },
+        )
 
     def undo_last_edit(self, args: UndoLastEditArgs) -> ToolResult:
         del args
@@ -414,18 +467,23 @@ class FileTools:
         if expected is not None and expected.lower() != actual:
             raise ValueError(f"sha256 mismatch: expected {expected.lower()}, got {actual}")
 
-    def _write_result(self, path: str, before: str, after: str) -> ToolResult:
-        diff, truncated = _diff(path, before, after)
+    def _write_result(
+        self, path: str, before: str, after: str, *, created: bool = False
+    ) -> ToolResult:
+        diff, truncated = _diff(path, before, after, created=created)
+        metadata: dict[str, object] = {
+            "sha256": sha256_text(after),
+            "previous_sha256": sha256_text(before),
+            "changed_files": [path],
+        }
+        if created:
+            metadata["created"] = True
         return ToolResult(
             ok=True,
             summary=f"wrote {path}",
             content=diff,
             truncated=truncated,
-            metadata={
-                "sha256": sha256_text(after),
-                "previous_sha256": sha256_text(before),
-                "changed_files": [path],
-            },
+            metadata=metadata,
         )
 
     def _record_snapshot(

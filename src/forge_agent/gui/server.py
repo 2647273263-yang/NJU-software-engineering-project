@@ -43,6 +43,7 @@ from forge_agent.gui.workspace_git import (
     git_switch_branch,
 )
 from forge_agent.gui.workspace_ops import (
+    accepted_diffs_from_metadata,
     apply_session_settings,
     create_workspace_file,
     latest_diff_for_path,
@@ -134,6 +135,10 @@ class SaveFileBody(BaseModel):
 class UndoBody(BaseModel):
     path: str | None = None
     workspace: str = ""
+
+
+class AcceptedDiffsBody(BaseModel):
+    diffs: dict[str, str] = Field(default_factory=dict)
 
 
 class GitWorkspaceBody(BaseModel):
@@ -347,7 +352,31 @@ def persist_gui_settings(database_path: Path, session_id: str, values: dict[str,
         record = storage.get_session(session_id)
         if record is None:
             return
-        storage.update_session_metadata(session_id, apply_session_settings(record.metadata, values))
+        updated = apply_session_settings(record.metadata, values)
+        changed = {
+            key: updated[key]
+            for key in (
+                "model",
+                "mode",
+                "verify_command",
+                "max_steps",
+                "max_tokens",
+                "max_cost",
+                "auto_approve",
+                "demo",
+                "task",
+            )
+            if record.metadata.get(key) != updated.get(key)
+        }
+        if changed:
+            storage.patch_session_metadata(session_id, changed)
+
+
+def persist_accepted_diffs(database_path: Path, session_id: str, diffs: dict[str, str]) -> None:
+    with SQLiteStorage(database_path) as storage:
+        if storage.get_session(session_id) is None:
+            return
+        storage.patch_session_metadata(session_id, {"accepted_diffs": dict(diffs)})
 
 
 async def _event_pump(runtime: GuiRuntime, queue: asyncio.Queue[ApplicationEvent]) -> None:
@@ -494,6 +523,7 @@ def create_app(
                 "running": runtime.service.running(session_id) is not None,
             },
             "settings": settings,
+            "accepted_diffs": accepted_diffs_from_metadata(record.metadata),
             "events": events_out,
             "claims": claim_rows(runtime.database_path, session_id, workspace=workspace),
             "pending_approvals": pending,
@@ -628,6 +658,15 @@ def create_app(
             "settings": session_settings_from_metadata(record.metadata),
             "task": record.metadata.get("task", ""),
         }
+
+    @app.patch("/api/sessions/{session_id}/accepted-diffs")
+    def patch_accepted_diffs(session_id: str, body: AcceptedDiffsBody) -> dict[str, Any]:
+        persist_accepted_diffs(runtime.database_path, session_id, body.diffs)
+        with SQLiteStorage(runtime.database_path) as storage:
+            record = storage.get_session(session_id)
+        if record is None:
+            raise _error(404, f"unknown session: {session_id}")
+        return {"accepted_diffs": accepted_diffs_from_metadata(record.metadata)}
 
     @app.delete("/api/sessions/{session_id}")
     def remove_session(session_id: str) -> dict[str, bool]:

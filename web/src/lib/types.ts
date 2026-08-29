@@ -67,6 +67,7 @@ export type RunSettings = {
 export type SessionDetail = {
   session: SessionRow;
   settings?: RunSettings;
+  accepted_diffs?: Record<string, string>;
   events: SessionEvent[];
   claims: ClaimRow[];
   pending_approvals: PendingApproval[];

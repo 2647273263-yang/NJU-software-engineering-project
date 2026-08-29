@@ -181,6 +181,59 @@ async def test_running_clears_on_run_finished_before_cleanup(tmp_path: Path, mon
 
 
 @pytest.mark.asyncio
+async def test_run_finish_keeps_gui_accepted_diffs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    released = asyncio.Event()
+
+    async def blocked_summary(*_args: object, **_kwargs: object) -> dict[str, object]:
+        await released.wait()
+        return {
+            "available": False,
+            "summary": "blocked",
+            "changed_entries": [],
+            "changed_files": [],
+            "insertions": 0,
+            "deletions": 0,
+            "untracked": 0,
+            "error_code": None,
+        }
+
+    monkeypatch.setattr(
+        "forge_agent.application.session_service.collect_workspace_summary",
+        blocked_summary,
+    )
+    bus = EventBus()
+    queue = bus.subscribe()
+    database = tmp_path / "state.sqlite3"
+    service = SessionService(
+        database,
+        events=bus,
+        model_factory=lambda _config: FakeModel([ModelResponse(text="done")]),
+    )
+    running = service.start_new(config(tmp_path), "Finish quickly.")
+    while True:
+        event = await asyncio.wait_for(queue.get(), timeout=5)
+        if event.kind == "run_finished" and event.session_id == running.id:
+            break
+
+    fingerprint = "bubble_sort.py::" + "a" * 64
+    with SQLiteStorage(database) as storage:
+        storage.patch_session_metadata(
+            running.id,
+            {"accepted_diffs": {"bubble_sort.py": fingerprint}},
+        )
+
+    released.set()
+    result = await running.task
+    assert result.status is AgentStatus.COMPLETED
+    with SQLiteStorage(database) as storage:
+        meta = storage.get_session(running.id).metadata
+        assert meta["accepted_diffs"]["bubble_sort.py"] == fingerprint
+        assert meta["status"] == AgentStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
 async def test_resume_marks_unfinished_tool_and_checks_workspace(tmp_path: Path) -> None:
     database = tmp_path / "state.sqlite3"
     with SQLiteStorage(database) as storage:

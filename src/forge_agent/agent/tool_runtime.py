@@ -12,7 +12,7 @@ from forge_agent.storage import EditTransactionRecord, SnapshotRecord, SQLiteSto
 from forge_agent.tools.workspace import WorkspaceSandbox
 from forge_agent.types import ToolCall, ToolResult
 
-_EDIT_TOOLS = frozenset({"replace_in_file", "write_file"})
+_EDIT_TOOLS = frozenset({"replace_in_file", "write_file", "delete_file"})
 
 
 class PersistentToolRuntime:

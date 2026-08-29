@@ -279,3 +279,20 @@ def apply_session_settings(metadata: dict[str, Any], values: dict[str, Any]) -> 
     if values.get("title"):
         updated["task"] = str(values["title"]).strip() or updated.get("task", "")
     return updated
+
+
+def accepted_diffs_from_metadata(metadata: dict[str, Any]) -> dict[str, str]:
+    raw = metadata.get("accepted_diffs")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(path): str(diff)
+        for path, diff in raw.items()
+        if isinstance(path, str) and isinstance(diff, str)
+    }
+
+
+def apply_accepted_diffs(metadata: dict[str, Any], diffs: dict[str, str]) -> dict[str, Any]:
+    updated = dict(metadata)
+    updated["accepted_diffs"] = dict(diffs)
+    return updated

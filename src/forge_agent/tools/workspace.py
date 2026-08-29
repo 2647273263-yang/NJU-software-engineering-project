@@ -8,8 +8,15 @@ from contextlib import suppress
 from pathlib import Path
 
 
+from forge_agent.tools.sensitive import sensitive_read_reason
+
+
 class WorkspaceViolation(ValueError):
     """Raised when a requested path escapes the workspace."""
+
+
+class SensitivePathError(ValueError):
+    """Raised when a workspace path is blocked because it looks like a secret."""
 
 
 class WorkspaceSandbox:
@@ -36,6 +43,15 @@ class WorkspaceSandbox:
 
     def relative(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix()
+
+    def deny_sensitive_content(self, path: Path) -> None:
+        relative = self.relative(path)
+        reason = sensitive_read_reason(relative)
+        if reason:
+            raise SensitivePathError(f"reading {relative} is blocked ({reason})")
+
+    def is_sensitive_content(self, path: Path) -> bool:
+        return sensitive_read_reason(self.relative(path)) is not None
 
     def atomic_write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

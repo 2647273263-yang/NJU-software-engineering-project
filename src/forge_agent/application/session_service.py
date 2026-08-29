@@ -100,9 +100,13 @@ class SessionService:
             if not history:
                 raise ValueError("session has no persisted conversation history")
             metadata = dict(session.metadata)
-            metadata["mode"] = config.mode.value
-            metadata["status"] = AgentStatus.INITIALIZING.value
-            storage.update_session_metadata(session_id, metadata)
+            self._write_runtime_metadata(
+                storage,
+                session_id,
+                metadata,
+                mode=config.mode.value,
+                status=AgentStatus.INITIALIZING.value,
+            )
         return self._start(config, session_id, instruction, metadata, history=history)
 
     async def run_new(self, config: RunConfig, task: str) -> RunResult:
@@ -301,8 +305,9 @@ class SessionService:
                 policy_runtime.policy.mode = mode
                 policy_runtime.policy.planning_pass = False
                 config.mode = mode
-                metadata["mode"] = mode.value
-                storage.update_session_metadata(session_id, metadata)
+                self._write_runtime_metadata(
+                    storage, session_id, metadata, mode=mode.value
+                )
 
             initial_summary, compacted_through = self._restore_compaction(
                 storage, session_id
@@ -342,8 +347,12 @@ class SessionService:
                 )
             except asyncio.CancelledError:
                 self._mark_agent_done(session_id)
-                metadata["status"] = AgentStatus.CANCELLED.value
-                storage.update_session_metadata(session_id, metadata)
+                self._write_runtime_metadata(
+                    storage,
+                    session_id,
+                    metadata,
+                    status=AgentStatus.CANCELLED.value,
+                )
                 self.events.publish(
                     session_id,
                     "run_finished",
@@ -361,10 +370,29 @@ class SessionService:
                     verification=loop.state.verification,
                 )
             self._persist_evidence(storage, session_id, result)
-            metadata["status"] = result.status.value
-            storage.update_session_metadata(session_id, metadata)
+            self._write_runtime_metadata(
+                storage,
+                session_id,
+                metadata,
+                status=result.status.value,
+            )
             self.approvals.clear_session(session_id)
             return result
+
+    @staticmethod
+    def _write_runtime_metadata(
+        storage: SQLiteStorage,
+        session_id: str,
+        metadata: dict[str, Any],
+        **fields: Any,
+    ) -> None:
+        """Write status/mode without clobbering GUI fields such as accepted_diffs."""
+
+        storage.patch_session_metadata(session_id, fields)
+        record = storage.get_session(session_id)
+        latest = dict(record.metadata) if record is not None else {**metadata, **fields}
+        metadata.clear()
+        metadata.update(latest)
 
     @staticmethod
     async def _attach_workspace_summary(

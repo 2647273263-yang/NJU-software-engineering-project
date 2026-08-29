@@ -22,6 +22,11 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./lib/api";
+import {
+  collectChangedFiles,
+  fileFingerprint,
+  isChangeAccepted,
+} from "./lib/changes";
 import { dropBlock, hunkStats, parseChangeBlocks, type ChangeBlock } from "./lib/diffHunks";
 import {
   HIDDEN_CHAT_KINDS,
@@ -64,6 +69,7 @@ type OpenDoc = {
   truncated: boolean;
   stale: boolean;
   incoming: string | null;
+  missing?: boolean;
 };
 
 const LAYOUT_KEY = "forge-agent-layout";
@@ -103,18 +109,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function diffStats(diff: string | null): { added: number; deleted: number } {
-  let added = 0;
-  let deleted = 0;
-  if (!diff) return { added, deleted };
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
-    if (line.startsWith("+")) added += 1;
-    else if (line.startsWith("-")) deleted += 1;
-  }
-  return { added, deleted };
-}
-
 function groupEvents(events: SessionEvent[], streamText: string): ChatBlock[] {
   const blocks: ChatBlock[] = [];
   for (const event of events) {
@@ -150,26 +144,16 @@ function shortPath(path: string): string {
   return parts.slice(-2).join("/") || path || "未选择工作区";
 }
 
-function collectChangedFiles(
-  events: SessionEvent[],
-): { path: string; diff: string | null; added: number; deleted: number }[] {
-  const map = new Map<string, string>();
-  for (const event of events) {
-    const diff = event.view.diff;
-    if (!diff) continue;
-    const stats = diffStats(diff);
-    if (stats.added === 0 && stats.deleted === 0) continue;
-    const fromHeader = diff.match(/^\+\+\+ [ab]\/(.+)$/m)?.[1];
-    const path =
-      fromHeader && fromHeader !== "/dev/null"
-        ? fromHeader
-        : event.view.path?.replaceAll("\\", "/");
-    if (!path) continue;
-    map.set(path, diff);
-  }
-  return [...map.entries()].map(([path, diff]) => ({ path, diff, ...diffStats(diff) }));
-}
 
+function ChangeKindLabel({ kind }: { kind: "added" | "deleted" | "modified" }) {
+  if (kind === "added") {
+    return <span className="shrink-0 text-[11px] text-emerald-400">新增</span>;
+  }
+  if (kind === "deleted") {
+    return <span className="shrink-0 text-[11px] text-red-400">已删除</span>;
+  }
+  return null;
+}
 
 function LineDelta({ added, deleted }: { added: number; deleted: number }) {
   if (added === 0 && deleted === 0) return null;
@@ -290,9 +274,17 @@ export default function App() {
   tabsRef.current = tabs;
 
   const blocks = useMemo(() => groupEvents(events, streamText), [events, streamText]);
-  const changed = useMemo(() => collectChangedFiles(events), [events]);
+  const changed = useMemo(() => {
+    try {
+      return collectChangedFiles(events);
+    } catch {
+      return [];
+    }
+  }, [events]);
+  const changedRef = useRef(changed);
+  changedRef.current = changed;
   const pendingChanges = useMemo(
-    () => changed.filter((file) => resolvedDiffs[file.path] !== (file.diff ?? "")),
+    () => changed.filter((file) => !isChangeAccepted(file, resolvedDiffs)),
     [changed, resolvedDiffs],
   );
   const changedPaths = useMemo(() => new Set(pendingChanges.map((file) => file.path)), [pendingChanges]);
@@ -313,15 +305,27 @@ export default function App() {
   }, [tree, paletteQuery]);
 
   function persistResolved(sessionId: string | null, value: Record<string, string>) {
-    if (sessionId) sessionStorage.setItem(`forge-resolved:${sessionId}`, JSON.stringify(value));
+    if (!sessionId) return;
+    try {
+      localStorage.setItem(`forge-resolved:${sessionId}`, JSON.stringify(value));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    void api.saveAcceptedDiffs(sessionId, value).catch(() => undefined);
   }
 
   function readResolved(sessionId: string): Record<string, string> {
     try {
-      return JSON.parse(sessionStorage.getItem(`forge-resolved:${sessionId}`) || "{}") as Record<
-        string,
-        string
-      >;
+      const local = localStorage.getItem(`forge-resolved:${sessionId}`);
+      if (local) {
+        return JSON.parse(local) as Record<string, string>;
+      }
+      const previous = sessionStorage.getItem(`forge-resolved:${sessionId}`);
+      if (previous) {
+        localStorage.setItem(`forge-resolved:${sessionId}`, previous);
+        return JSON.parse(previous) as Record<string, string>;
+      }
+      return {};
     } catch {
       return {};
     }
@@ -351,7 +355,7 @@ export default function App() {
     setTask("");
     setTabs([]);
     setActivePath(null);
-    setResolvedDiffs(readResolved(id));
+    setResolvedDiffs({ ...readResolved(id), ...(data.accepted_diffs ?? {}) });
     inspector.current?.open("files");
     if (data.settings) {
       const next = defaultSettings(data.settings);
@@ -388,14 +392,34 @@ export default function App() {
       setActivePath(path);
       return;
     }
+    const pending = changedRef.current.find((item) => item.path === path);
+    if (pending?.kind === "deleted") {
+      const hidden = isChangeAccepted(pending, resolvedRef.current);
+      const doc: OpenDoc = {
+        path,
+        content: "",
+        draft: "",
+        diff: hidden ? null : pending.diff,
+        hunks: hidden ? [] : parseChangeBlocks(pending.diff),
+        binary: false,
+        truncated: false,
+        stale: false,
+        incoming: null,
+        missing: true,
+      };
+      setTabs((current) => [...current.filter((item) => item.path !== path), doc]);
+      setActivePath(path);
+      return;
+    }
     const data = await api.file(settings.workspace, path, selectedId ?? undefined);
-    const hidden = resolvedRef.current[data.path] === (data.diff ?? "");
+    const file = changedRef.current.find((item) => item.path === data.path || item.path === path);
+    const hidden = !file || isChangeAccepted(file, resolvedRef.current);
     const doc: OpenDoc = {
       path: data.path,
       content: data.content,
       draft: data.content,
-      diff: hidden ? null : data.diff,
-      hunks: hidden ? [] : parseChangeBlocks(data.diff),
+      diff: hidden ? null : (data.diff ?? file?.diff ?? null),
+      hunks: hidden ? [] : parseChangeBlocks(data.diff ?? file?.diff ?? null),
       binary: data.binary,
       truncated: data.truncated,
       stale: false,
@@ -453,7 +477,8 @@ export default function App() {
         current.map((item) => {
           if (item.path !== path) return item;
           if (item.draft === item.content) {
-            const hidden = resolvedRef.current[data.path] === (data.diff ?? "");
+            const file = changedRef.current.find((entry) => entry.path === data.path || entry.path === path);
+            const hidden = !file || isChangeAccepted(file, resolvedRef.current);
             return {
               ...item,
               content: data.content,
@@ -473,7 +498,24 @@ export default function App() {
         }),
       );
     } catch {
-      /* file may have been deleted */
+      const pending = changedRef.current.find((item) => item.path === path);
+      if (pending?.kind !== "deleted") return;
+      setTabs((current) =>
+        current.map((item) =>
+          item.path === path
+            ? {
+                ...item,
+                content: "",
+                draft: "",
+                diff: pending.diff,
+                hunks: parseChangeBlocks(pending.diff),
+                stale: false,
+                incoming: null,
+                missing: true,
+              }
+            : item,
+        ),
+      );
     }
   }
 
@@ -525,6 +567,11 @@ export default function App() {
             setClaims(data.claims);
             setEvents(data.events);
             setApproval(data.pending_approvals[0] ?? null);
+            setResolvedDiffs((current) => ({
+              ...current,
+              ...readResolved(event.session_id),
+              ...(data.accepted_diffs ?? {}),
+            }));
           });
         }
         setSessions((current) => withRunEnded(current, event.session_id, nextStatus));
@@ -589,17 +636,13 @@ export default function App() {
     setTabs((current) =>
       current.map((doc) => {
         const file = changed.find((item) => item.path === doc.path);
-        const hidden = !file || resolvedDiffs[file.path] === (file.diff ?? "");
+        const hidden = !file || isChangeAccepted(file, resolvedDiffs);
         const nextDiff = hidden ? null : (file?.diff ?? null);
         if (doc.diff === nextDiff) return doc;
         return { ...doc, diff: nextDiff, hunks: parseChangeBlocks(nextDiff) };
       }),
     );
   }, [changed, resolvedDiffs]);
-
-  useEffect(() => {
-    persistResolved(selectedId, resolvedDiffs);
-  }, [selectedId, resolvedDiffs]);
 
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
@@ -722,10 +765,28 @@ export default function App() {
     }
   }
 
-  function resolveAgentChange(path: string, diff: string | null) {
-    setResolvedDiffs((current) => ({ ...current, [path]: diff ?? "" }));
+  function rememberAccepted(path: string, fingerprint: string) {
+    const next = { ...resolvedRef.current, [path]: fingerprint };
+    setResolvedDiffs(next);
+    persistResolved(selectedRef.current, next);
     setTabs((current) =>
       current.map((item) => (item.path === path ? { ...item, diff: null, hunks: [] } : item)),
+    );
+  }
+
+  async function flushPath(path: string) {
+    const workspace = settingsRef.current.workspace;
+    const doc = tabsRef.current.find((item) => item.path === path);
+    if (!workspace || !doc || doc.binary || doc.truncated || doc.draft === doc.content) return;
+    const result = await api.saveFile(workspace, path, doc.draft, selectedRef.current ?? undefined);
+    if (!result.ok) {
+      setError(result.summary);
+      return;
+    }
+    setTabs((current) =>
+      current.map((item) =>
+        item.path === path ? { ...item, content: item.draft, stale: false, incoming: null } : item,
+      ),
     );
   }
 
@@ -739,14 +800,18 @@ export default function App() {
       ),
     );
     if (nextHunks.length === 0) {
-      const file = changed.find((item) => item.path === path);
-      resolveAgentChange(path, file?.diff ?? doc.diff);
+      const file = changedRef.current.find((item) => item.path === path);
+      rememberAccepted(path, file?.fingerprint ?? fileFingerprint(path, doc.diff));
     }
   }
 
   async function undoHunk(path: string, id: string, nextContent: string) {
     const doc = tabsRef.current.find((item) => item.path === path);
     if (!doc || !settings.workspace) return;
+    if (doc.missing) {
+      await undoFile(path);
+      return;
+    }
     const nextHunks = dropBlock(doc.hunks, id);
     setTabs((current) =>
       current.map((item) =>
@@ -771,8 +836,8 @@ export default function App() {
       }
       setError("");
       if (nextHunks.length === 0) {
-        const file = changed.find((item) => item.path === path);
-        resolveAgentChange(path, file?.diff ?? doc.diff);
+        const file = changedRef.current.find((item) => item.path === path);
+        rememberAccepted(path, file?.fingerprint ?? fileFingerprint(path, doc.diff));
       }
     } catch (exc) {
       setTabs((current) => current.map((item) => (item.path === path ? doc : item)));
@@ -782,20 +847,22 @@ export default function App() {
     }
   }
 
-  function acceptAgentFile(path: string) {
-    const file = changed.find((item) => item.path === path);
-    resolveAgentChange(path, file?.diff ?? (openFile?.path === path ? openFile.diff : null));
+  async function acceptAgentFile(path: string) {
+    await flushPath(path);
+    const file = changedRef.current.find((item) => item.path === path);
+    rememberAccepted(path, file?.fingerprint ?? fileFingerprint(path, file?.diff ?? null));
   }
 
-  function acceptAllAgentFiles() {
-    setResolvedDiffs((current) => {
-      const next = { ...current };
-      for (const file of pendingChanges) next[file.path] = file.diff ?? "";
-      return next;
-    });
+  async function acceptAllAgentFiles() {
+    const targets = [...pendingChanges];
+    for (const file of targets) await flushPath(file.path);
+    const next = { ...resolvedRef.current };
+    for (const file of targets) next[file.path] = file.fingerprint;
+    setResolvedDiffs(next);
+    persistResolved(selectedRef.current, next);
     setTabs((current) =>
       current.map((item) =>
-        pendingChanges.some((file) => file.path === item.path) ? { ...item, diff: null, hunks: [] } : item,
+        targets.some((file) => file.path === item.path) ? { ...item, diff: null, hunks: [] } : item,
       ),
     );
   }
@@ -828,7 +895,7 @@ export default function App() {
     const result = await api.undo(selectedId, settings.workspace, path);
     setError(result.ok ? "" : result.summary);
     if (result.ok) {
-      resolveAgentChange(path, file?.diff ?? (openFile?.path === path ? openFile.diff : null));
+      rememberAccepted(path, file?.fingerprint ?? fileFingerprint(path, file?.diff ?? null));
       await refreshTree();
       if (tabsRef.current.some((item) => item.path === path)) await reloadTab(path);
     }
@@ -840,7 +907,7 @@ export default function App() {
     const targets = [...pendingChanges];
     for (const file of targets) {
       await api.undo(selectedId, settings.workspace, file.path);
-      resolveAgentChange(file.path, file.diff);
+      rememberAccepted(file.path, file.fingerprint);
     }
     await refreshTree();
     for (const file of targets) {
@@ -1133,8 +1200,8 @@ export default function App() {
                   type="button"
                   size="sm"
                   variant="ghost"
-                  title="接受这些 Agent 修改并去掉红绿对比。文件已经在磁盘上。"
-                  onClick={() => acceptAllAgentFiles()}
+                  title="这些改动已经写进文件。接受只收起对比，不会再写一遍。"
+                  onClick={() => void acceptAllAgentFiles()}
                 >
                   <Check className="h-3.5 w-3.5" />
                   全部接受
@@ -1156,13 +1223,14 @@ export default function App() {
                     >
                       {file.path}
                     </button>
+                    <ChangeKindLabel kind={file.kind} />
                     <LineDelta added={file.added} deleted={file.deleted} />
                     <Button
                       type="button"
                       size="sm"
                       variant="ghost"
-                      title="接受这些修改并去掉红绿对比。文件已经在磁盘上。"
-                      onClick={() => acceptAgentFile(file.path)}
+                      title="这些改动已经写进文件。接受只收起对比。"
+                      onClick={() => void acceptAgentFile(file.path)}
                     >
                       <Check className="h-3 w-3" />
                       接受
@@ -1451,7 +1519,7 @@ export default function App() {
                       <Button
                         size="sm"
                         variant={dirty ? "default" : "ghost"}
-                        disabled={saving || openFile.binary || openFile.truncated || (!dirty && !openFile.stale)}
+                        disabled={saving || openFile.binary || openFile.truncated || openFile.missing || (!dirty && !openFile.stale)}
                         title="把你在编辑器里手改的内容写回磁盘"
                         onClick={() => void saveOpenFile(true)}
                       >
@@ -1459,6 +1527,11 @@ export default function App() {
                         {saving ? "保存中" : "保存"}
                       </Button>
                     </div>
+                    {openFile.missing ? (
+                      <p className="border-b border-border px-3 py-2 text-[12px] text-red-300/90">
+                        文件已被 Agent 删除。接受将保持删除；撤销可恢复到删除前。
+                      </p>
+                    ) : null}
                     {openFile.binary || openFile.truncated ? (
                       <p className="p-3 text-[12px] text-muted-foreground">
                         {openFile.binary ? "二进制文件无法在此编辑。" : "文件过大，未加载全部内容。"}

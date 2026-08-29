@@ -76,6 +76,14 @@ export const api = {
         body: JSON.stringify(settings),
       }),
     ),
+  saveAcceptedDiffs: (id: string, diffs: Record<string, string>) =>
+    parse<{ accepted_diffs: Record<string, string> }>(
+      fetch(`/api/sessions/${id}/accepted-diffs`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ diffs }),
+      }),
+    ),
   pickWorkspace: () => parse<{ path: string | null }>(fetch("/api/workspace/pick", { method: "POST" })),
   tree: (workspace: string) =>
     parse<{ tree: TreeNode[] }>(

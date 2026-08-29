@@ -35,6 +35,7 @@ class PolicyEngine:
         {
             "replace_in_file",
             "write_file",
+            "delete_file",
             "undo_last_edit",
             "rollback_changes",
             "verify_changes",
@@ -48,6 +49,10 @@ class PolicyEngine:
         r"(?i)(?:^|[;&|]\s*)(?:rm|rmdir|del|format|shutdown|reboot)\b"
         r"|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\b)"
         r"|(?:curl|wget)\b.*\|\s*(?:sh|bash|pwsh|powershell)\b"
+        r"|os\.(?:remove|unlink)\s*\("
+        r"|pathlib[^\n]{0,80}\.unlink\s*\("
+        r"|shutil\.rmtree\s*\("
+        r"|Remove-Item\b"
     )
 
     def __init__(

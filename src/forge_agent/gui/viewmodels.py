@@ -78,7 +78,14 @@ def event_to_view(
         content = payload.get("content")
         diff = (
             str(content)
-            if name in {"replace_in_file", "write_file", "undo_last_edit", "rollback_changes"}
+            if name
+            in {
+                "replace_in_file",
+                "write_file",
+                "delete_file",
+                "undo_last_edit",
+                "rollback_changes",
+            }
             and content
             else None
         )
@@ -246,6 +253,7 @@ def _tool_title(name: str, payload: dict[str, Any], *, started: bool, ok: bool =
     labels = {
         "read_file": f"读取 {short}" if short else "读取文件",
         "write_file": f"写入 {short}" if short else "写入文件",
+        "delete_file": f"删除 {short}" if short else "删除文件",
         "replace_in_file": f"修改 {short}" if short else "修改文件",
         "list_files": "列出文件",
         "search_text": f"搜索 {query}" if query else "搜索代码",

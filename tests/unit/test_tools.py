@@ -11,6 +11,7 @@ import pytest
 from forge_agent.tools import WorkspaceSandbox, WorkspaceViolation, build_default_registry
 from forge_agent.tools.command import CommandTools
 from forge_agent.tools.schemas import RunCommandArgs
+from forge_agent.tools.sensitive import sensitive_read_reason
 
 
 def test_sandbox_rejects_parent_absolute_and_symlink_escape(tmp_path: Path) -> None:
@@ -32,6 +33,42 @@ def test_sandbox_rejects_parent_absolute_and_symlink_escape(tmp_path: Path) -> N
         pytest.skip("creating symlinks is not permitted on this system")
     with pytest.raises(WorkspaceViolation):
         sandbox.resolve("link/new.txt")
+
+
+def test_sensitive_read_reason_blocks_secrets_but_allows_examples() -> None:
+    assert sensitive_read_reason(".env") == ".env"
+    assert sensitive_read_reason("config/.env.local") == ".env"
+    assert sensitive_read_reason(".env.example") is None
+    assert sensitive_read_reason(".git/config") == ".git internals"
+    assert sensitive_read_reason(".ssh/id_rsa") == "credential directory"
+    assert sensitive_read_reason("certs/server.pem") == "private key"
+    assert sensitive_read_reason("src/app.py") is None
+
+
+@pytest.mark.asyncio
+async def test_read_file_blocks_dotenv_and_git_objects(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("SECRET=supersecret\n", encoding="utf-8")
+    (tmp_path / ".env.example").write_text("SECRET=\n", encoding="utf-8")
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\n", encoding="utf-8")
+    registry = build_default_registry(tmp_path)
+
+    blocked = await registry.call("read_file", {"path": ".env"})
+    example = await registry.call("read_file", {"path": ".env.example"})
+    git_object = await registry.call("read_file", {"path": ".git/config"})
+    search = await registry.call("search_text", {"query": "supersecret"})
+
+    assert not blocked.ok
+    assert blocked.error_code == "SensitivePathError"
+    assert "supersecret" not in (blocked.content or "")
+    assert "supersecret" not in blocked.summary
+    assert example.ok
+    assert "SECRET=" in example.content
+    assert not git_object.ok
+    assert git_object.error_code == "SensitivePathError"
+    assert search.ok
+    assert "supersecret" not in search.content
 
 
 @pytest.mark.asyncio
@@ -99,6 +136,70 @@ async def test_file_tools_hash_unique_replace_and_atomic_write(tmp_path: Path) -
     assert undone.ok
     assert undone.metadata["undo"] is True
     assert target.read_text(encoding="utf-8") == "one two one"
+
+
+@pytest.mark.asyncio
+async def test_write_file_create_and_delete_file_emit_whole_file_diffs(tmp_path: Path) -> None:
+    registry = build_default_registry(tmp_path)
+
+    created = await registry.call("write_file", {"path": "new.txt", "content": "hello\n"})
+    assert created.ok
+    assert created.metadata["created"] is True
+    assert created.content.startswith("--- /dev/null")
+    assert "+++ b/new.txt" in created.content
+    assert "+hello" in created.content
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello\n"
+
+    empty = await registry.call("write_file", {"path": "empty.txt", "content": ""})
+    assert empty.ok
+    assert empty.metadata["created"] is True
+    assert empty.content.startswith("--- /dev/null")
+    assert "+++ b/empty.txt" in empty.content
+    assert (tmp_path / "empty.txt").is_file()
+
+    deleted = await registry.call("delete_file", {"path": "new.txt"})
+    assert deleted.ok
+    assert deleted.metadata["deleted"] is True
+    assert "--- a/new.txt" in deleted.content
+    assert "+++ /dev/null" in deleted.content
+    assert "-hello" in deleted.content
+    assert not (tmp_path / "new.txt").exists()
+
+    restored = await registry.call("undo_last_edit", {})
+    assert restored.ok
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_replace_in_file_honors_expected_replacements(tmp_path: Path) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_text("one two one", encoding="utf-8")
+    registry = build_default_registry(tmp_path)
+
+    wrong_count = await registry.call(
+        "replace_in_file",
+        {
+            "path": "sample.txt",
+            "old_text": "one",
+            "new_text": "three",
+            "expected_replacements": 3,
+        },
+    )
+    assert not wrong_count.ok
+    assert target.read_text(encoding="utf-8") == "one two one"
+
+    replaced = await registry.call(
+        "replace_in_file",
+        {
+            "path": "sample.txt",
+            "old_text": "one",
+            "new_text": "three",
+            "expected_replacements": 2,
+        },
+    )
+    assert replaced.ok
+    assert replaced.metadata["replacements"] == 2
+    assert target.read_text(encoding="utf-8") == "three two three"
 
 
 @pytest.mark.asyncio

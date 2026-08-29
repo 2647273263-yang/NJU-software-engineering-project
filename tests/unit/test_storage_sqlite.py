@@ -45,6 +45,47 @@ def test_persists_sessions_messages_events_and_compactions(tmp_path) -> None:
         assert len(reopened.list_messages("session-1")) == 2
 
 
+def test_replace_messages_rewrites_history_despite_compaction_foreign_keys(
+    tmp_path,
+) -> None:
+    with SQLiteStorage(tmp_path / "state.db") as storage:
+        storage.create_session("session-1")
+        first = storage.append_message("session-1", Message(role="user", content="edit"))
+        storage.append_message(
+            "session-1",
+            Message(
+                role="assistant",
+                tool_calls=[ToolCall(id="call-1", name="write_file", arguments={})],
+            ),
+        )
+        storage.save_compaction(
+            "session-1",
+            through_message_id=first.id,
+            retained_from_message_id=None,
+            summary={"goal": "keep going"},
+        )
+
+        storage.replace_messages(
+            "session-1",
+            [
+                Message(role="user", content="edit"),
+                Message(
+                    role="assistant",
+                    tool_calls=[ToolCall(id="call-1", name="write_file", arguments={})],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="call-1",
+                    content="write_file was interrupted before a result was recorded.",
+                ),
+            ],
+        )
+
+        roles = [record.message.role for record in storage.list_messages("session-1")]
+        assert roles == ["user", "assistant", "tool"]
+        assert storage.latest_compaction("session-1") is None
+
+
 def test_transaction_rolls_back_nested_repository_calls(tmp_path) -> None:
     with SQLiteStorage(tmp_path / "state.db") as storage:
         storage.create_session("session-1")

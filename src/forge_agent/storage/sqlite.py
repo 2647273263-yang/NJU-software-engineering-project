@@ -254,6 +254,32 @@ class SQLiteStorage:
         assert message_id is not None
         return self.get_message(message_id)
 
+    def replace_messages(self, session_id: str, messages: list[Message]) -> None:
+        with self.transaction():
+            self._connection.execute(
+                "DELETE FROM compactions WHERE session_id = ?", (session_id,)
+            )
+            self._connection.execute(
+                "DELETE FROM messages WHERE session_id = ?", (session_id,)
+            )
+            for sequence, message in enumerate(messages, start=1):
+                self._connection.execute(
+                    """
+                    INSERT INTO messages(
+                        session_id, sequence, role, content, tool_call_id, tool_calls_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session_id,
+                        sequence,
+                        message.role,
+                        message.content,
+                        message.tool_call_id,
+                        _json([call.model_dump(mode="json") for call in message.tool_calls]),
+                    ),
+                )
+            self._touch(session_id)
+
     def get_message(self, message_id: int) -> MessageRecord:
         row = self._connection.execute(
             "SELECT * FROM messages WHERE id = ?", (message_id,)

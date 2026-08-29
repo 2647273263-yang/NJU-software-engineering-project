@@ -140,6 +140,47 @@ async def test_session_service_cancels_background_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_running_clears_on_run_finished_before_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    released = asyncio.Event()
+
+    async def blocked_summary(*_args: object, **_kwargs: object) -> dict[str, object]:
+        await released.wait()
+        return {
+            "available": False,
+            "summary": "blocked",
+            "changed_entries": [],
+            "changed_files": [],
+            "insertions": 0,
+            "deletions": 0,
+            "untracked": 0,
+            "error_code": None,
+        }
+
+    monkeypatch.setattr(
+        "forge_agent.application.session_service.collect_workspace_summary",
+        blocked_summary,
+    )
+    bus = EventBus()
+    queue = bus.subscribe()
+    service = SessionService(
+        tmp_path / "state.sqlite3",
+        events=bus,
+        model_factory=lambda _config: FakeModel([ModelResponse(text="done")]),
+    )
+    running = service.start_new(config(tmp_path), "Finish quickly.")
+    while True:
+        event = await asyncio.wait_for(queue.get(), timeout=5)
+        if event.kind == "run_finished" and event.session_id == running.id:
+            break
+
+    assert service.running(running.id) is None
+    assert not running.task.done()
+    released.set()
+    result = await running.task
+    assert result.status is AgentStatus.COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_resume_marks_unfinished_tool_and_checks_workspace(tmp_path: Path) -> None:
     database = tmp_path / "state.sqlite3"
     with SQLiteStorage(database) as storage:
@@ -177,6 +218,62 @@ async def test_resume_marks_unfinished_tool_and_checks_workspace(tmp_path: Path)
     other.mkdir()
     with pytest.raises(ValueError, match="workspace differs"):
         service.resume(config(other), "resume", "Continue.")
+
+
+@pytest.mark.asyncio
+async def test_resume_repairs_assistant_tool_calls_without_results(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    with SQLiteStorage(database) as storage:
+        storage.create_session(
+            "resume-tools",
+            metadata={
+                "workspace": tmp_path.as_posix(),
+                "task": "resume",
+                "mode": "build",
+            },
+        )
+        storage.append_message("resume-tools", Message(role="user", content="edit gitignore"))
+        storage.append_message(
+            "resume-tools",
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCall(
+                        id="call_missing",
+                        name="write_file",
+                        arguments={"path": ".gitignore", "content": "x"},
+                    )
+                ],
+            ),
+        )
+    model = FakeModel([ModelResponse(text="repaired")])
+    service = SessionService(
+        database,
+        model_factory=lambda _config: model,
+    )
+
+    result = await service.resume(config(tmp_path), "resume-tools", "Continue.").task
+
+    assert result.status is AgentStatus.COMPLETED
+    first = model.calls[0]
+    assert any(
+        message.role == "tool" and message.tool_call_id == "call_missing"
+        for message in first
+    )
+    tool_index = next(
+        index
+        for index, message in enumerate(first)
+        if message.role == "tool" and message.tool_call_id == "call_missing"
+    )
+    user_index = next(
+        index
+        for index, message in enumerate(first)
+        if message.role == "user" and message.content == "Continue."
+    )
+    assert tool_index < user_index
+    assert first[tool_index - 1].role == "assistant"
+    assert first[tool_index - 1].tool_calls
+    assert first[tool_index - 1].tool_calls[0].id == "call_missing"
 
 
 def test_database_schema_version_is_recorded(tmp_path: Path) -> None:

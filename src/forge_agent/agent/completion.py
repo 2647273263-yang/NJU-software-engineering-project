@@ -17,7 +17,7 @@ class CompletionDecision:
 
 class CompletionJudge:
     def evaluate(self, state: AgentState) -> CompletionDecision:
-        if not state.changed_files:
+        if not state.run_changed_files:
             return CompletionDecision(
                 status=AgentStatus.COMPLETED,
                 accepted=True,

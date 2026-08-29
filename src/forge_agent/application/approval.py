@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 
 from forge_agent.application.events import EventBus
-from forge_agent.safety import PolicyDecision
+from forge_agent.safety import PolicyDecision, RiskLevel
 from forge_agent.types import ToolCall
 
 
@@ -17,6 +17,7 @@ class PendingApproval:
     session_id: str
     call: ToolCall
     decision: PolicyDecision
+    kind: str = "tool"
 
 
 class ApprovalBroker:
@@ -47,8 +48,43 @@ class ApprovalBroker:
             "approval_requested",
             {
                 "approval_id": request_id,
+                "kind": "tool",
                 "tool": call.name,
                 "arguments": call.arguments,
+                "risk": decision.risk.value,
+                "reason": decision.reason,
+            },
+        )
+        try:
+            return await future
+        finally:
+            self._pending.pop(request_id, None)
+
+    async def request_plan(self, session_id: str, plan_text: str) -> bool:
+        request_id = uuid.uuid4().hex
+        call = ToolCall(
+            id="plan",
+            name="propose_plan",
+            arguments={"plan": plan_text},
+        )
+        decision = PolicyDecision(
+            allowed=True,
+            risk=RiskLevel.MEDIUM,
+            requires_approval=True,
+            reason="方案已在对话中给出。确认后才会改代码。",
+        )
+        approval = PendingApproval(request_id, session_id, call, decision, kind="plan")
+        future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = (approval, future)
+        self.events.publish(
+            session_id,
+            "approval_requested",
+            {
+                "approval_id": request_id,
+                "kind": "plan",
+                "tool": "propose_plan",
+                "plan": plan_text,
+                "arguments": {},
                 "risk": decision.risk.value,
                 "reason": decision.reason,
             },

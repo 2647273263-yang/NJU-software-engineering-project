@@ -129,6 +129,8 @@ class OpenAICompatibleClient:
         payload: dict[str, Any] = {"role": message.role}
         if message.content is not None:
             payload["content"] = message.content
+        elif message.tool_calls:
+            payload["content"] = None
         if message.tool_call_id is not None:
             payload["tool_call_id"] = message.tool_call_id
         if message.tool_calls:

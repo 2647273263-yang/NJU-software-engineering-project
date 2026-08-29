@@ -22,6 +22,7 @@ ALLOWED_TRANSITIONS: dict[AgentStatus, frozenset[AgentStatus]] = {
             AgentStatus.EXECUTING_TOOL,
             AgentStatus.VERIFYING,
             AgentStatus.AWAITING_APPROVAL,
+            AgentStatus.AWAITING_PLAN_APPROVAL,
             AgentStatus.DEBUGGING,
             AgentStatus.COMPLETED,
             AgentStatus.FAILED,
@@ -34,6 +35,7 @@ ALLOWED_TRANSITIONS: dict[AgentStatus, frozenset[AgentStatus]] = {
             AgentStatus.THINKING,
             AgentStatus.VERIFYING,
             AgentStatus.AWAITING_APPROVAL,
+            AgentStatus.AWAITING_PLAN_APPROVAL,
             AgentStatus.DEBUGGING,
             AgentStatus.FAILED,
             AgentStatus.CANCELLED,
@@ -44,6 +46,15 @@ ALLOWED_TRANSITIONS: dict[AgentStatus, frozenset[AgentStatus]] = {
         {
             AgentStatus.EXECUTING_TOOL,
             AgentStatus.THINKING,
+            AgentStatus.FAILED,
+            AgentStatus.CANCELLED,
+            AgentStatus.STOPPED,
+        }
+    ),
+    AgentStatus.AWAITING_PLAN_APPROVAL: frozenset(
+        {
+            AgentStatus.THINKING,
+            AgentStatus.EXECUTING_TOOL,
             AgentStatus.FAILED,
             AgentStatus.CANCELLED,
             AgentStatus.STOPPED,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable, Iterator
@@ -56,9 +57,11 @@ class ToolRegistry:
         try:
             spec = self.get(name)
             validated = spec.arguments.model_validate(arguments)
-            result = spec.handler(validated)
-            if inspect.isawaitable(result):
-                result = await result
+            handler = spec.handler
+            if inspect.iscoroutinefunction(getattr(handler, "__func__", handler)):
+                result = await handler(validated)
+            else:
+                result = await asyncio.to_thread(handler, validated)
         except (ValidationError, KeyError) as exc:
             error_code = (
                 "invalid_arguments" if isinstance(exc, ValidationError) else "unknown_tool"

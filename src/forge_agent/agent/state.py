@@ -20,6 +20,7 @@ class AgentState:
     total_cost_usd: float = 0.0
     workspace_version: int = 0
     changed_files: set[str] = field(default_factory=set)
+    run_changed_files: set[str] = field(default_factory=set)
     verification: VerificationRecord | None = None
     completion_nudge_sent: bool = False
     consecutive_empty_responses: int = 0
@@ -30,9 +31,13 @@ class AgentState:
     def set_status(self, status: AgentStatus) -> None:
         self.status = transition(self.status, status)
 
+    def begin_run(self) -> None:
+        self.run_changed_files.clear()
+        self.completion_nudge_sent = False
+
     @property
     def needs_verification(self) -> bool:
-        return bool(self.changed_files) and (
+        return bool(self.run_changed_files) and (
             self.verification is None
             or self.verification.workspace_version != self.workspace_version
             or not self.verification.passed
@@ -52,6 +57,7 @@ class AgentState:
             return
         self.workspace_version += 1
         self.changed_files.update(paths)
+        self.run_changed_files.update(paths)
 
     def record_verification(self, verification: VerificationRecord) -> None:
         self.verification = verification

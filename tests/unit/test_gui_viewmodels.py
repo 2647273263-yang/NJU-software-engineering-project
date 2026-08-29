@@ -185,6 +185,26 @@ def test_user_message_is_chat_text() -> None:
     assert view.answer is False
 
 
+def test_plan_approval_events_use_chinese_titles() -> None:
+    requested = event_to_view(
+        event(
+            "approval_requested",
+            {
+                "kind": "plan",
+                "plan": "Goal: fix tests\nFeasibility: yes",
+                "reason": "Confirm the plan",
+            },
+        )
+    )
+    ready = event_to_view(event("plan_ready", {"plan": "a plan"}))
+    approved = event_to_view(event("plan_approved", {"mode": "build"}))
+
+    assert requested.title == "是否按此方案执行？"
+    assert "确认后才会改代码" in requested.detail or "Confirm" in requested.detail
+    assert ready.title.startswith("方案已提出")
+    assert approved.title.startswith("已确认")
+
+
 def test_gui_shutdown_by_keyboard_interrupt_is_graceful(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import sys
@@ -44,6 +45,23 @@ async def test_registry_validates_arguments_and_unknown_tools(tmp_path: Path) ->
         "read_file",
         "run_command",
     }
+
+
+@pytest.mark.asyncio
+async def test_registry_reads_two_files_concurrently(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("bravo", encoding="utf-8")
+    registry = build_default_registry(tmp_path)
+
+    first, second = await asyncio.gather(
+        registry.call("read_file", {"path": "a.txt"}),
+        registry.call("read_file", {"path": "b.txt"}),
+    )
+
+    assert first.ok
+    assert second.ok
+    assert "alpha" in first.content
+    assert "bravo" in second.content
 
 
 @pytest.mark.asyncio

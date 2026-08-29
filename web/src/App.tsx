@@ -29,6 +29,7 @@ import {
   loadSettings,
   saveSettings,
   STATUS_LABEL,
+  TERMINAL_STATUSES,
   type ClaimRow,
   type PendingApproval,
   type RunSettings,
@@ -199,18 +200,18 @@ function ModeSelect({
         <ChevronDown className="h-3 w-3" />
       </button>
       {open ? (
-        <div className="absolute bottom-8 left-0 z-20 min-w-[220px] overflow-hidden rounded-md border border-border bg-[#1f1f1f] py-1">
+        <div className="absolute bottom-8 left-0 z-20 min-w-[88px] overflow-hidden rounded-md border border-border bg-[#1f1f1f] py-1">
           {(
             [
-              ["build", "Agent", "可以改文件并运行命令"],
-              ["plan", "Plan", "只分析，不改工作区"],
+              ["build", "Agent"],
+              ["plan", "Plan"],
             ] as const
-          ).map(([mode, label, hint]) => (
+          ).map(([mode, label]) => (
             <button
               key={mode}
               type="button"
               className={cn(
-                "block w-full px-3 py-1.5 text-left hover:bg-[#3a3a3a]",
+                "block w-full px-3 py-1.5 text-left text-[12px] text-[#ececec] hover:bg-[#3a3a3a]",
                 value === mode && "bg-[#3d4d6b]",
               )}
               onClick={() => {
@@ -218,14 +219,31 @@ function ModeSelect({
                 setOpen(false);
               }}
             >
-              <div className="text-[12px] text-[#ececec]">{label}</div>
-              <div className="text-[11px] text-muted-foreground">{hint}</div>
+              {label}
             </button>
           ))}
         </div>
       ) : null}
     </div>
   );
+}
+
+function withRunEnded(sessions: SessionRow[], sessionId: string, status: string): SessionRow[] {
+  return sessions.map((session) =>
+    session.id === sessionId ? { ...session, running: false, status } : session,
+  );
+}
+
+function sessionShowsSpinner(
+  session: SessionRow,
+  selectedId: string | null,
+  running: boolean,
+  selectedStatus: string,
+): boolean {
+  const live = Boolean(session.running) || (session.id === selectedId && running);
+  if (!live) return false;
+  const current = session.id === selectedId ? selectedStatus : session.status;
+  return !TERMINAL_STATUSES.has(current);
 }
 
 export default function App() {
@@ -262,6 +280,8 @@ export default function App() {
   const scroller = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedId;
+  const runningRef = useRef(false);
+  runningRef.current = running;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const resolvedRef = useRef(resolvedDiffs);
@@ -326,7 +346,7 @@ export default function App() {
     setClaims(data.claims);
     setApproval(data.pending_approvals[0] ?? null);
     setStatus(data.session.status);
-    setRunning(Boolean(data.session.running));
+    setRunning(Boolean(data.session.running) && !TERMINAL_STATUSES.has(data.session.status));
     setStreamText("");
     setTask("");
     setTabs([]);
@@ -494,8 +514,32 @@ export default function App() {
     });
     socket.addEventListener("message", (message) => {
       const event = JSON.parse(message.data) as SessionEvent;
+      if (event.kind === "run_finished") {
+        const nextStatus = String(event.payload.status ?? "completed");
+        if (event.session_id === selectedRef.current) {
+          setRunning(false);
+          setStreamText("");
+          setStatus(nextStatus);
+          void refreshTree(settingsRef.current.workspace);
+          void api.session(event.session_id, settingsRef.current.demo).then((data) => {
+            setClaims(data.claims);
+            setEvents(data.events);
+            setApproval(data.pending_approvals[0] ?? null);
+          });
+        }
+        setSessions((current) => withRunEnded(current, event.session_id, nextStatus));
+        void refreshSessions().then(() => {
+          setSessions((current) =>
+            current.map((session) => {
+              if (session.id !== event.session_id) return session;
+              if (session.id === selectedRef.current && runningRef.current) return session;
+              return { ...session, running: false, status: nextStatus };
+            }),
+          );
+        });
+      }
       if (event.session_id !== selectedRef.current) {
-        void refreshSessions();
+        if (event.kind !== "run_finished") void refreshSessions();
         return;
       }
       if (event.kind === "model_delta") {
@@ -515,26 +559,18 @@ export default function App() {
       if (event.kind === "approval_requested") {
         setApproval({
           id: String(event.payload.approval_id ?? ""),
+          kind: event.payload.kind === "plan" ? "plan" : "tool",
           tool: String(event.payload.tool ?? ""),
           arguments: (event.payload.arguments as Record<string, unknown>) ?? {},
           risk: String(event.payload.risk ?? ""),
           reason: String(event.payload.reason ?? ""),
+          plan: typeof event.payload.plan === "string" ? event.payload.plan : undefined,
         });
-        setStatus("awaiting_approval");
+        setStatus(
+          event.payload.kind === "plan" ? "awaiting_plan_approval" : "awaiting_approval",
+        );
       }
       if (event.kind === "approval_resolved") setApproval(null);
-      if (event.kind === "run_finished") {
-        setRunning(false);
-        setStreamText("");
-        setStatus(String(event.payload.status ?? "completed"));
-        void refreshSessions();
-        void refreshTree(settingsRef.current.workspace);
-        void api.session(event.session_id, settingsRef.current.demo).then((data) => {
-          setClaims(data.claims);
-          setEvents(data.events);
-          setApproval(data.pending_approvals[0] ?? null);
-        });
-      }
       if (event.view.path) void syncTabFromDisk(event.view.path.replaceAll("\\", "/"));
       if (event.view.diff || event.view.path) void refreshTree(settingsRef.current.workspace);
     });
@@ -988,7 +1024,7 @@ export default function App() {
                   <div className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
                     {session.task || "未命名任务"}
                   </div>
-                  {session.running || (session.id === selectedId && running) ? (
+                  {sessionShowsSpinner(session, selectedId, running, status) ? (
                     <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
                   ) : (
                     <span
@@ -1200,9 +1236,15 @@ export default function App() {
           <div className="mx-auto mb-2 flex w-full max-w-[720px] items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
             <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-400" />
             <div className="min-w-0 flex-1">
-              <div className="text-[13px]">需要审批：{approval.tool}</div>
-              <div className="text-[12px] text-muted-foreground">{approval.reason}</div>
-              {Object.keys(approval.arguments).length > 0 ? (
+              <div className="text-[13px]">
+                {approval.kind === "plan" ? "是否按此方案执行？" : `需要审批：${approval.tool}`}
+              </div>
+              <div className="text-[12px] text-muted-foreground">
+                {approval.kind === "plan"
+                  ? "方案已在上方对话中。点「执行」才改代码，点「先不改」则停在方案。"
+                  : approval.reason}
+              </div>
+              {approval.kind === "plan" ? null : Object.keys(approval.arguments).length > 0 ? (
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-[11px] text-muted-foreground">
                   {JSON.stringify(approval.arguments, null, 2)}
                 </pre>
@@ -1212,21 +1254,23 @@ export default function App() {
                   size="sm"
                   onClick={() => void api.approve(approval.id, { approved: true, remember_for_session: false })}
                 >
-                  允许
+                  {approval.kind === "plan" ? "执行" : "允许"}
                 </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => void api.approve(approval.id, { approved: true, remember_for_session: true })}
-                >
-                  本会话记住
-                </Button>
+                {approval.kind === "plan" ? null : (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void api.approve(approval.id, { approved: true, remember_for_session: true })}
+                  >
+                    本会话记住
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => void api.approve(approval.id, { approved: false, remember_for_session: false })}
                 >
-                  拒绝
+                  {approval.kind === "plan" ? "先不改" : "拒绝"}
                 </Button>
               </div>
             </div>

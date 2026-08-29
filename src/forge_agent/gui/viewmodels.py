@@ -183,7 +183,31 @@ def event_to_view(
         else:
             detail = str(payload.get("summary", "Git 不可用"))
         return TimelineItem(event.kind, "工作树汇总", detail, "info", process=True)
+    if event.kind == "plan_ready":
+        return TimelineItem(
+            event.kind,
+            "方案已提出，等待确认是否执行",
+            str(payload.get("plan") or "")[:800],
+            "warning",
+            process=True,
+        )
+    if event.kind == "plan_approved":
+        return TimelineItem(
+            event.kind,
+            "已确认，开始改代码",
+            "",
+            "success",
+            process=True,
+        )
     if event.kind == "approval_requested":
+        if payload.get("kind") == "plan":
+            return TimelineItem(
+                event.kind,
+                "是否按此方案执行？",
+                str(payload.get("reason") or "方案已在对话中给出。确认后才会改代码。"),
+                "warning",
+                process=True,
+            )
         return TimelineItem(
             event.kind,
             f"需要审批：{payload.get('tool', '工具')}",

@@ -1,4 +1,4 @@
-from forge_agent.safety import PolicyEngine, RiskLevel
+from forge_agent.safety import PolicyEngine, READ_ONLY_TOOLS, RiskLevel
 from forge_agent.types import RunMode
 
 
@@ -25,6 +25,15 @@ def test_policy_blocks_mutation_in_plan_mode_and_is_conservative() -> None:
     assert unknown.risk == RiskLevel.HIGH
 
 
+def test_planning_pass_blocks_writes_without_calling_it_plan_mode() -> None:
+    policy = PolicyEngine(mode=RunMode.PLAN, planning_pass=True)
+    decision = policy.evaluate("write_file", {"path": ".gitignore"})
+
+    assert not decision.allowed
+    assert "confirm the plan" in decision.reason
+    assert "plan mode" not in decision.reason
+
+
 def test_policy_treats_repo_outline_and_git_status_as_read_only() -> None:
     policy = PolicyEngine()
 
@@ -35,6 +44,8 @@ def test_policy_treats_repo_outline_and_git_status_as_read_only() -> None:
     assert status.risk is RiskLevel.LOW
     assert not outline.requires_approval
     assert not status.requires_approval
+    for name in READ_ONLY_TOOLS:
+        assert policy.evaluate(name, {"path": ".", "query": "x"}).risk is RiskLevel.LOW
 
 
 def test_policy_flags_install_and_network_commands_as_medium() -> None:

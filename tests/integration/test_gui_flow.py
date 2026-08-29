@@ -10,7 +10,7 @@ from forge_agent.config import RunConfig
 from forge_agent.gui.viewmodels import event_to_view
 from forge_agent.model.fake import FakeModel
 from forge_agent.storage import SQLiteStorage
-from forge_agent.types import AgentStatus, ModelResponse, ToolCall
+from forge_agent.types import AgentStatus, ModelResponse, RunMode, ToolCall
 
 
 def tool_response(call_id: str, name: str, **arguments: Any) -> ModelResponse:
@@ -60,7 +60,10 @@ async def test_fake_model_drives_gui_diff_and_evidence_panels(tmp_path: Path) ->
 
     assert result.status is AgentStatus.COMPLETED
     assert any(view.diff and "+    return 42" in view.diff for view in views)
-    assert any(view.title == "verify_changes 执行成功" for view in views)
+    assert any(
+        view.kind == "tool_finished" and view.title.startswith("验证") and view.tone == "success"
+        for view in views
+    )
     with SQLiteStorage(database) as storage:
         claims = storage.list_claims(running.id)
         assert claims
@@ -122,3 +125,71 @@ async def test_gui_approval_pauses_without_blocking_event_loop(tmp_path: Path) -
 
     assert result.status is AgentStatus.COMPLETED
     assert (tmp_path / "approved.txt").read_text(encoding="utf-8") == "approved\n"
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_completes_without_execution_approval(tmp_path: Path) -> None:
+    model = FakeModel(
+        [
+            ModelResponse(
+                text="Goal: inspect the workspace.\nFeasibility: read-only.\nSuggestions: none."
+            )
+        ]
+    )
+    service = SessionService(
+        tmp_path / "plan.sqlite3",
+        model_factory=lambda _config: model,
+    )
+    config = RunConfig(
+        workspace=tmp_path,
+        model="fake",
+        api_key=SecretStr("test"),
+        mode=RunMode.PLAN,
+        auto_approve=False,
+    )
+
+    result = await service.start_new(config, "分析工作区").task
+
+    assert result.status is AgentStatus.COMPLETED
+    assert "inspect the workspace" in result.summary
+    assert service.approvals.pending() == []
+
+
+@pytest.mark.asyncio
+async def test_agent_plan_first_pauses_for_confirmation_then_implements(tmp_path: Path) -> None:
+    model = FakeModel(
+        [
+            ModelResponse(
+                text="Goal: add a marker file.\nFeasibility: safe.\nImplementation: write done.txt."
+            ),
+            ModelResponse(text="Implemented after confirmation."),
+        ]
+    )
+    service = SessionService(
+        tmp_path / "plan.sqlite3",
+        model_factory=lambda _config: model,
+    )
+    config = RunConfig(
+        workspace=tmp_path,
+        model="fake",
+        api_key=SecretStr("test"),
+        mode=RunMode.BUILD,
+        auto_approve=False,
+    )
+
+    running = service.start_new(config, "先给出方案，再执行")
+    pending = []
+    for _ in range(100):
+        pending = service.approvals.pending(running.id)
+        if pending:
+            break
+        await asyncio.sleep(0.01)
+
+    assert pending
+    assert pending[0].kind == "plan"
+    assert not running.task.done()
+    assert service.approvals.resolve(pending[0].id, True)
+    result = await running.task
+
+    assert result.status is AgentStatus.COMPLETED
+    assert "Implemented after confirmation" in result.summary

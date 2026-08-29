@@ -14,6 +14,7 @@ class AgentStatus(StrEnum):
     EXECUTING_TOOL = "executing_tool"
     VERIFYING = "verifying"
     AWAITING_APPROVAL = "awaiting_approval"
+    AWAITING_PLAN_APPROVAL = "awaiting_plan_approval"
     DEBUGGING = "debugging"
     COMPLETED = "completed"
     FAILED = "failed"

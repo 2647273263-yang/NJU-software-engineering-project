@@ -44,10 +44,12 @@ export type ClaimRow = {
 
 export type PendingApproval = {
   id: string;
+  kind?: "tool" | "plan";
   tool: string;
   arguments: Record<string, unknown>;
   risk: string;
   reason: string;
+  plan?: string;
 };
 
 export type RunSettings = {
@@ -111,12 +113,20 @@ export function saveSettings(settings: RunSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(rest));
 }
 
+export const TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "stopped",
+]);
+
 export const STATUS_LABEL: Record<string, string> = {
   initializing: "初始化中",
   thinking: "思考中",
   executing_tool: "执行工具",
   verifying: "验证中",
   awaiting_approval: "等待审批",
+  awaiting_plan_approval: "等待批准计划",
   debugging: "调试中",
   running: "运行中",
   completed: "已完成",

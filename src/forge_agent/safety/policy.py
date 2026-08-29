@@ -10,6 +10,11 @@ from pydantic import BaseModel
 
 from forge_agent.types import RunMode
 
+READ_ONLY_TOOLS = frozenset(
+    {"read_file", "list_files", "search_text", "git_diff", "git_status", "repo_outline"}
+)
+PARALLEL_READ_LIMIT = 4
+
 
 class RiskLevel(StrEnum):
     LOW = "low"
@@ -25,9 +30,7 @@ class PolicyDecision(BaseModel):
 
 
 class PolicyEngine:
-    _READ_ONLY = frozenset(
-        {"read_file", "list_files", "search_text", "git_diff", "git_status", "repo_outline"}
-    )
+    _READ_ONLY = READ_ONLY_TOOLS
     _MUTATING = frozenset(
         {
             "replace_in_file",
@@ -47,21 +50,31 @@ class PolicyEngine:
         r"|(?:curl|wget)\b.*\|\s*(?:sh|bash|pwsh|powershell)\b"
     )
 
-    def __init__(self, *, mode: RunMode = RunMode.BUILD, auto_approve: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        mode: RunMode = RunMode.BUILD,
+        auto_approve: bool = False,
+        planning_pass: bool = False,
+    ) -> None:
         self.mode = mode
         self.auto_approve = auto_approve
+        self.planning_pass = planning_pass
 
     def evaluate(self, tool_name: str, arguments: dict[str, Any]) -> PolicyDecision:
         risk, reason = self.classify(tool_name, arguments)
         mutating = tool_name in self._MUTATING or tool_name == "run_command"
-        allowed = risk != RiskLevel.HIGH and not (
-            self.mode == RunMode.PLAN and mutating
-        )
+        planning = self.mode == RunMode.PLAN or self.planning_pass
+        allowed = risk != RiskLevel.HIGH and not (planning and mutating)
         requires_approval = (
             allowed and risk == RiskLevel.MEDIUM and not self.auto_approve
         )
-        if self.mode == RunMode.PLAN and mutating:
-            reason = "mutating tools are disabled in plan mode"
+        if planning and mutating:
+            reason = (
+                "planning pass: wait for the user to confirm the plan before editing"
+                if self.planning_pass
+                else "mutating tools are disabled in plan mode"
+            )
         return PolicyDecision(
             allowed=allowed,
             risk=risk,

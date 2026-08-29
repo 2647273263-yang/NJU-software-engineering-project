@@ -49,12 +49,29 @@ def _database_path() -> Path:
 
 
 def _approve_in_terminal(call: ToolCall, decision: PolicyDecision) -> bool:
+    if call.name == "propose_plan":
+        plan = str(call.arguments.get("plan") or "")
+        if plan:
+            console.print(plan)
+        return typer.confirm(
+            "Approve this plan and continue in Agent/Build mode?",
+            default=False,
+        )
     console.print(
         f"[yellow]Approval required[/yellow] · {call.name} · "
         f"{decision.risk.value}: {decision.reason}"
     )
     console.print(call.arguments)
     return typer.confirm("Allow this operation?", default=False)
+
+
+def _plan_aware_approver(build_after_plan: bool):
+    def handler(call: ToolCall, decision: PolicyDecision) -> bool:
+        if call.name == "propose_plan" and build_after_plan:
+            return True
+        return _approve_in_terminal(call, decision)
+
+    return handler
 
 
 async def _render_session(
@@ -114,7 +131,7 @@ def run(
         bool,
         typer.Option(
             "--build-after-plan",
-            help="After a successful plan, ask to continue in build mode.",
+            help="After a plan is produced, continue in build mode without asking again.",
         ),
     ] = False,
 ) -> None:
@@ -141,28 +158,12 @@ def run(
         service = SessionService(
             _database_path(),
             events=events,
-            approval_handler=_approve_in_terminal,
+            approval_handler=_plan_aware_approver(build_after_plan),
         )
         renderer = ConsoleRenderer(console)
         console.print(f"[dim]Workspace: {config.workspace.as_posix()}[/dim]")
         running = service.start_new(config, task)
         result = await _render_session(running, queue, renderer)
-        if (
-            config.mode is RunMode.PLAN
-            and build_after_plan
-            and result.status is AgentStatus.COMPLETED
-            and typer.confirm("Approve this plan and continue in build mode?", default=False)
-        ):
-            build_config = config.model_copy(update={"mode": RunMode.BUILD})
-            running = service.resume(
-                build_config,
-                running.id,
-                (
-                    "The user approved the plan. Implement it now, verify the latest changes, "
-                    "and report evidence."
-                ),
-            )
-            result = await _render_session(running, queue, renderer)
         events.unsubscribe(queue)
         return result
 

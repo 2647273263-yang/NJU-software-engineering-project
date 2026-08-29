@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from forge_agent.agent import AgentLoop
+from forge_agent.agent.loop import repair_tool_history
 from forge_agent.agent.evidence import EvidenceLedger
+from forge_agent.agent.plan_gate import uses_readonly_plan, wants_plan_first
 from forge_agent.agent.tool_runtime import PersistentToolRuntime
 from forge_agent.application.approval import ApprovalBroker
 from forge_agent.application.events import EventBus
@@ -22,13 +24,14 @@ from forge_agent.context import (
     discover_project_context,
 )
 from forge_agent.model import ModelClient, OpenAICompatibleClient
-from forge_agent.safety import PolicyDecision, PolicyEngine, PolicyToolRuntime
+from forge_agent.safety import PolicyDecision, PolicyEngine, PolicyToolRuntime, RiskLevel
 from forge_agent.storage import SQLiteStorage
 from forge_agent.tools import build_default_registry
 from forge_agent.tools.git import collect_workspace_summary
 from forge_agent.types import (
     AgentStatus,
     Message,
+    RunMode,
     RunResult,
     ToolCall,
     ToolResult,
@@ -39,10 +42,11 @@ ModelFactory = Callable[[RunConfig], ModelClient]
 ApprovalHandler = Callable[[ToolCall, PolicyDecision], bool | Awaitable[bool]]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class RunningSession:
     id: str
     task: asyncio.Task[RunResult]
+    agent_done: bool = False
 
 
 class SessionService:
@@ -91,6 +95,7 @@ class SessionService:
                     "the configured workspace differs from the persisted session workspace"
                 )
             self._mark_interrupted_tools(storage, session_id)
+            self._repair_incomplete_tool_messages(storage, session_id)
             history = [record.message for record in storage.list_messages(session_id)]
             if not history:
                 raise ValueError("session has no persisted conversation history")
@@ -112,14 +117,23 @@ class SessionService:
         return True
 
     def running(self, session_id: str) -> RunningSession | None:
-        return self._running.get(session_id)
+        item = self._running.get(session_id)
+        if item is None or item.task.done() or item.agent_done:
+            return None
+        return item
+
+    def _mark_agent_done(self, session_id: str) -> None:
+        item = self._running.get(session_id)
+        if item is not None:
+            item.agent_done = True
 
     async def rollback_changes(
         self,
         config: RunConfig,
         session_id: str,
     ) -> ToolResult:
-        if self.running(session_id) is not None:
+        live = self._running.get(session_id)
+        if live is not None and not live.task.done():
             return ToolResult(
                 ok=False,
                 summary="cannot roll back while the session is running",
@@ -210,13 +224,12 @@ class SessionService:
         with SQLiteStorage(self.database_path) as storage:
 
             def on_event(kind: str, payload: dict[str, Any]) -> None:
+                if kind == "run_finished":
+                    self._mark_agent_done(session_id)
                 storage.append_event(session_id, kind, payload)
                 self.events.publish(session_id, kind, payload)
                 if kind == "context_compacted":
                     self._persist_compaction(storage, session_id, payload)
-                if kind == "run_finished":
-                    metadata["status"] = payload["status"]
-                    storage.update_session_metadata(session_id, metadata)
 
             def on_message(message: Message) -> None:
                 storage.append_message(session_id, message)
@@ -239,6 +252,8 @@ class SessionService:
                     )
                 )
             discovered = discover_project_context(config.workspace)
+            planning = uses_readonly_plan(task, mode=config.mode)
+            planning_pass = wants_plan_first(task, mode=config.mode)
             registry = build_default_registry(
                 config.workspace,
                 command_timeout_s=config.command_timeout_s,
@@ -247,7 +262,11 @@ class SessionService:
             )
             policy_runtime = PolicyToolRuntime(
                 registry,
-                PolicyEngine(mode=config.mode, auto_approve=config.auto_approve),
+                PolicyEngine(
+                    mode=RunMode.PLAN if planning else config.mode,
+                    auto_approve=config.auto_approve,
+                    planning_pass=planning_pass,
+                ),
                 approve=approve,
             )
             tools = PersistentToolRuntime(
@@ -256,6 +275,35 @@ class SessionService:
                 session_id,
                 config.workspace,
             )
+
+            async def approve_plan(plan_text: str) -> bool:
+                if config.auto_approve:
+                    return True
+                if self.approval_handler is not None:
+                    call = ToolCall(
+                        id="plan",
+                        name="propose_plan",
+                        arguments={"plan": plan_text},
+                    )
+                    decision = PolicyDecision(
+                        allowed=True,
+                        risk=RiskLevel.MEDIUM,
+                        requires_approval=True,
+                        reason="方案已在对话中给出。确认后才会改代码。",
+                    )
+                    approved = self.approval_handler(call, decision)
+                    if inspect.isawaitable(approved):
+                        approved = await approved
+                    return bool(approved)
+                return await self.approvals.request_plan(session_id, plan_text)
+
+            def on_mode_change(mode: RunMode) -> None:
+                policy_runtime.policy.mode = mode
+                policy_runtime.policy.planning_pass = False
+                config.mode = mode
+                metadata["mode"] = mode.value
+                storage.update_session_metadata(session_id, metadata)
+
             initial_summary, compacted_through = self._restore_compaction(
                 storage, session_id
             )
@@ -278,6 +326,8 @@ class SessionService:
                 context=context,
                 on_event=on_event,
                 on_message=on_message,
+                on_plan_approval=approve_plan,
+                on_mode_change=on_mode_change,
                 verification_commands=list(discovered.verification_commands),
             )
             policy_runtime.on_status = loop.state.set_status
@@ -291,6 +341,7 @@ class SessionService:
                     on_event,
                 )
             except asyncio.CancelledError:
+                self._mark_agent_done(session_id)
                 metadata["status"] = AgentStatus.CANCELLED.value
                 storage.update_session_metadata(session_id, metadata)
                 self.events.publish(
@@ -306,10 +357,12 @@ class SessionService:
                     model_calls=loop.state.model_calls,
                     total_tokens=loop.state.total_tokens,
                     total_cost_usd=loop.state.total_cost_usd,
-                    changed_files=sorted(loop.state.changed_files),
+                    changed_files=sorted(loop.state.run_changed_files),
                     verification=loop.state.verification,
                 )
             self._persist_evidence(storage, session_id, result)
+            metadata["status"] = result.status.value
+            storage.update_session_metadata(session_id, metadata)
             self.approvals.clear_session(session_id)
             return result
 
@@ -462,3 +515,13 @@ class SessionService:
                     "reason": "session resumed before a matching tool result was recorded",
                 },
             )
+
+    @staticmethod
+    def _repair_incomplete_tool_messages(
+        storage: SQLiteStorage,
+        session_id: str,
+    ) -> None:
+        history = [record.message for record in storage.list_messages(session_id)]
+        repaired = repair_tool_history(history)
+        if repaired != history:
+            storage.replace_messages(session_id, repaired)

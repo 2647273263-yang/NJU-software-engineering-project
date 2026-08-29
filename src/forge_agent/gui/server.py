@@ -444,8 +444,7 @@ def create_app(
     def list_sessions(demo: bool = False) -> dict[str, Any]:
         rows = session_rows(runtime.database_path, demo=demo)
         for item in rows:
-            live = runtime.service.running(str(item["id"]))
-            item["running"] = live is not None and not live.task.done()
+            item["running"] = runtime.service.running(str(item["id"])) is not None
         return {"sessions": rows}
 
     @app.get("/api/sessions/{session_id}")
@@ -465,15 +464,18 @@ def create_app(
         ]
         pending = []
         for approval in runtime.service.approvals.pending(session_id):
-            pending.append(
-                {
-                    "id": approval.id,
-                    "tool": approval.call.name,
-                    "arguments": redact_data(approval.call.arguments, workspace=workspace),
-                    "risk": approval.decision.risk.value,
-                    "reason": redact_text(approval.decision.reason, workspace=workspace),
-                }
-            )
+            item = {
+                "id": approval.id,
+                "kind": approval.kind,
+                "tool": approval.call.name,
+                "arguments": redact_data(approval.call.arguments, workspace=workspace),
+                "risk": approval.decision.risk.value,
+                "reason": redact_text(approval.decision.reason, workspace=workspace),
+            }
+            if approval.kind == "plan":
+                item["plan"] = str(approval.call.arguments.get("plan") or "")
+                item["arguments"] = {}
+            pending.append(item)
         settings = session_settings_from_metadata(record.metadata)
         settings["workspace"] = real_workspace
         return {

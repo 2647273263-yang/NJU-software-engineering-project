@@ -200,6 +200,30 @@ export const api = {
         body: JSON.stringify({ workspace }),
       }),
     ),
+  exportSession: async (id: string) => {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/export`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(typeof data.detail === "string" ? data.detail : "导出失败");
+    }
+    const blob = await response.blob();
+    const match = /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") || "");
+    const filename = match?.[1] || `forge-session-${id.slice(0, 8)}.json`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  },
+  importSession: (payload: unknown) =>
+    parse<{ session_id: string }>(
+      fetch("/api/sessions/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
 };
 
 export type GitSnapshot = {

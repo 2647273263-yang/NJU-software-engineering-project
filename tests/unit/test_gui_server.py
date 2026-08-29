@@ -193,3 +193,33 @@ def test_gui_can_delete_session(tmp_path: Path) -> None:
     with TestClient(app) as client:
         assert client.delete("/api/sessions/sess-1").json()["deleted"] is True
         assert client.get("/api/sessions").json()["sessions"] == []
+
+
+def test_gui_session_json_export_and_import(tmp_path: Path) -> None:
+    from forge_agent.storage import SQLiteStorage
+    from forge_agent.types import Message
+
+    database = tmp_path / "sessions.sqlite3"
+    with SQLiteStorage(database) as storage:
+        storage.create_session("sess-export", {"task": "修登录", "workspace": str(tmp_path), "mode": "build"})
+        storage.append_message("sess-export", Message(role="user", content="请修登录"))
+        storage.append_event("sess-export", "user_message", {"text": "请修登录"})
+        storage.append_event("sess-export", "model_response", {"text": "已看过代码", "tool_calls": 0})
+        claim = storage.save_claim("sess-export", "登录可以跑", "verified")
+        storage.save_evidence(claim.id, "test", "pytest 通过")
+    app = create_app(database_path=database)
+    with TestClient(app) as client:
+        exported = client.get("/api/sessions/sess-export/export")
+        assert exported.status_code == 200
+        bundle = exported.json()
+        assert bundle["format"] == "forge-agent.session"
+        assert bundle["session"]["metadata"]["task"] == "修登录"
+        assert len(bundle["messages"]) == 1
+        imported = client.post("/api/sessions/import", json=bundle)
+        assert imported.status_code == 200
+        new_id = imported.json()["session_id"]
+        assert new_id != "sess-export"
+        detail = client.get(f"/api/sessions/{new_id}").json()
+        assert detail["session"]["task"] == "修登录"
+        assert any(event["view"]["kind"] == "user_message" for event in detail["events"])
+        assert detail["claims"][0]["statement"] == "登录可以跑"

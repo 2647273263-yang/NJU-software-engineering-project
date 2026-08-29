@@ -6,8 +6,11 @@ import {
   Check,
   ChevronDown,
   FolderOpen,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
+  Loader2,
   RotateCcw,
   Save,
   SendHorizontal,
@@ -70,10 +73,18 @@ type LayoutState = {
   inspectorOnRight: boolean;
   tree: number;
   bottom: number;
+  sessionHidden: boolean;
 };
 
 function loadLayout(): LayoutState {
-  const fallback: LayoutState = { left: 240, inspector: 520, inspectorOnRight: true, tree: 168, bottom: 200 };
+  const fallback: LayoutState = {
+    left: 240,
+    inspector: 520,
+    inspectorOnRight: true,
+    tree: 168,
+    bottom: 200,
+    sessionHidden: false,
+  };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
     if (!raw) return fallback;
@@ -184,15 +195,15 @@ function ModeSelect({
         className="flex h-7 items-center gap-1 rounded-md border border-border bg-[#2a2a2a] px-2 text-[12px] text-[#ececec]"
         onClick={() => setOpen((current) => !current)}
       >
-        {value === "build" ? "执行" : "规划"}
+        {value === "build" ? "Agent" : "Plan"}
         <ChevronDown className="h-3 w-3" />
       </button>
       {open ? (
         <div className="absolute bottom-8 left-0 z-20 min-w-[220px] overflow-hidden rounded-md border border-border bg-[#1f1f1f] py-1">
           {(
             [
-              ["build", "执行", "可以改文件并运行命令"],
-              ["plan", "规划", "只分析，不改工作区"],
+              ["build", "Agent", "可以改文件并运行命令"],
+              ["plan", "Plan", "只分析，不改工作区"],
             ] as const
           ).map(([mode, label, hint]) => (
             <button
@@ -237,6 +248,7 @@ export default function App() {
   const filesPane = useRef<HTMLDivElement>(null);
   const inspectorBox = useRef<HTMLDivElement>(null);
   const inspector = useRef<InspectorHandle>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -820,10 +832,11 @@ export default function App() {
     if (!box) return;
     const current = layoutRef.current;
     const handle = 6;
-    const maxInspector = Math.max(260, box.width - current.left - handle * 2 - 280);
+    const left = current.sessionHidden ? 0 : current.left;
+    const maxInspector = Math.max(260, box.width - left - handle * 2 - 280);
     const width = current.inspectorOnRight
       ? box.right - clientX
-      : clientX - box.left - current.left - handle;
+      : clientX - box.left - left - handle;
     persistLayout({
       ...current,
       inspector: clamp(width, 260, maxInspector),
@@ -885,24 +898,74 @@ export default function App() {
     await refreshSessions();
   }
 
+  async function exportSession(id: string) {
+    try {
+      await api.exportSession(id);
+      setError("");
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "导出失败");
+    }
+  }
+
+  async function importSessionFile(file: File) {
+    try {
+      const payload = JSON.parse(await file.text()) as unknown;
+      const result = await api.importSession(payload);
+      await refreshSessions();
+      await loadSession(result.session_id);
+      setError("");
+    } catch (exc) {
+      setError(exc instanceof SyntaxError ? "这个文件不是有效的 JSON" : exc instanceof Error ? exc.message : "导入失败");
+    }
+  }
+
   const sidebar = (
     <aside className="flex shrink-0 flex-col bg-[#0f0f0f]" style={{ width: layout.left }}>
-      <div className="flex h-9 items-center justify-between px-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-5 w-5 items-center justify-center rounded bg-primary/15 text-[11px] font-semibold text-primary">
+      <div className="flex h-9 items-center justify-between gap-1 px-1">
+        <div className="flex min-w-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            title="隐藏会话列表，进入专注模式"
+            onClick={() => persistLayout({ ...layoutRef.current, sessionHidden: true })}
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
+          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-primary/15 text-[11px] font-semibold text-primary">
             F
           </div>
-          <span className="text-[12.5px] font-semibold">ForgeAgent</span>
+          <span className="truncate text-[12.5px] font-semibold">ForgeAgent</span>
         </div>
         <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="设置">
           <Settings className="h-4 w-4" />
         </Button>
       </div>
-      <div className="px-2 pb-2">
-        <Button variant="outline" className="w-full justify-start gap-2" onClick={() => void newChat()}>
+      <div className="flex gap-1 px-2 pb-2">
+        <Button variant="outline" className="min-w-0 flex-1 justify-start gap-2" onClick={() => void newChat()}>
           <Plus className="h-3.5 w-3.5" />
           新会话
         </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          title="inport"
+          onClick={() => importFileRef.current?.click()}
+        >
+          inport
+        </Button>
+        <input
+          ref={importFileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void importSessionFile(file);
+          }}
+        />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {sessions.length === 0 ? (
@@ -925,19 +988,32 @@ export default function App() {
                   <div className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
                     {session.task || "未命名任务"}
                   </div>
-                  <span
-                    className="shrink-0 font-mono text-[11px] text-muted-foreground"
-                    title={session.updated}
-                  >
-                    {timeAgo(session.updated, now)}
-                  </span>
+                  {session.running || (session.id === selectedId && running) ? (
+                    <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
+                  ) : (
+                    <span
+                      className="shrink-0 font-mono text-[11px] text-muted-foreground"
+                      title={session.updated}
+                    >
+                      {timeAgo(session.updated, now)}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {STATUS_LABEL[session.status] ?? session.status} ·{" "}
                   {shortPath(session.workspace_label || session.workspace)}
                 </div>
               </button>
               <div className="hidden shrink-0 pr-1 pt-1 group-hover:flex">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  title="export"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void exportSession(session.id)}
+                >
+                  export
+                </Button>
                 <Button
                   type="button"
                   size="icon"
@@ -966,8 +1042,21 @@ export default function App() {
 
   const chatPane = (
     <main className="flex min-h-0 min-w-[280px] flex-1 flex-col">
-        <header className="flex h-9 items-center justify-between border-b border-border px-4">
-          <div className="truncate text-[12px] text-muted-foreground">{shortPath(settings.workspace)}</div>
+        <header className="flex h-9 items-center justify-between gap-2 border-b border-border px-3">
+          <div className="flex min-w-0 items-center gap-1">
+            {layout.sessionHidden ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                title="显示会话列表"
+                onClick={() => persistLayout({ ...layoutRef.current, sessionHidden: false })}
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </Button>
+            ) : null}
+            <div className="truncate text-[12px] text-muted-foreground">{shortPath(settings.workspace)}</div>
+          </div>
           <div className="flex items-center gap-1">
             <Button
               type="button"
@@ -1404,8 +1493,12 @@ export default function App() {
 
   return (
     <div ref={layoutBox} className="flex h-full bg-background">
-      {sidebar}
-      <SplitHandle onMove={moveLeft} />
+      {layout.sessionHidden ? null : (
+        <>
+          {sidebar}
+          <SplitHandle onMove={moveLeft} />
+        </>
+      )}
       {layout.inspectorOnRight ? (
         <>
           {chatPane}

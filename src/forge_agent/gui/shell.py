@@ -72,8 +72,8 @@ class LiveTerminal:
 
     async def ensure(self, cols: int, rows: int) -> None:
         async with self._lock:
-            self._cols = max(20, cols)
-            self._rows = max(8, rows)
+            self._cols = max(48, cols)
+            self._rows = max(12, rows)
             if self._reader is not None and not self._reader.done():
                 self._resize_now(self._cols, self._rows)
                 return
@@ -122,8 +122,8 @@ class LiveTerminal:
             with suppress(json.JSONDecodeError, KeyError, TypeError, ValueError):
                 payload = json.loads(text)
                 if isinstance(payload, dict) and payload.get("type") == "resize":
-                    self._cols = max(20, int(payload["cols"]))
-                    self._rows = max(8, int(payload["rows"]))
+                    self._cols = max(48, int(payload["cols"]))
+                    self._rows = max(12, int(payload["rows"]))
                     self._resize_now(self._cols, self._rows)
                     return
         self.write(text)

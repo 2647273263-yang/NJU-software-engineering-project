@@ -12,9 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from platformdirs import user_data_path
 from pydantic import BaseModel, Field, SecretStr, ValidationError
@@ -24,6 +24,13 @@ from forge_agent.application import ApplicationEvent, EventBus, SessionService
 from forge_agent.config import RunConfig
 from forge_agent.gui.shell import LiveTerminal, get_terminal, run_terminal_command
 from forge_agent.gui.viewmodels import event_to_view, view_to_dict
+from forge_agent.gui.session_bundle import (
+    SessionBundleError,
+    bundle_filename,
+    dump_bundle_json,
+    export_session_bundle,
+    import_session_bundle,
+)
 from forge_agent.gui.workspace_git import (
     GitWorkspaceError,
     git_commit,
@@ -244,12 +251,18 @@ def serialize_event(
     }
 
 
-def session_rows(database_path: Path, *, demo: bool) -> list[dict[str, str]]:
+def session_rows(
+    database_path: Path,
+    *,
+    demo: bool,
+    running_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    active = running_ids or set()
     with SQLiteStorage(database_path) as storage:
         rows = storage.connection.execute(
             "SELECT id, updated_at, metadata_json FROM sessions ORDER BY updated_at DESC LIMIT 40"
         ).fetchall()
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for row in rows:
         metadata = json.loads(row["metadata_json"])
         workspace = str(metadata.get("workspace", ""))
@@ -258,15 +271,17 @@ def session_rows(database_path: Path, *, demo: bool) -> list[dict[str, str]]:
         if demo and workspace:
             label = redact_text(workspace, workspace=Path(workspace))
             task = redact_text(task, workspace=Path(workspace))
+        session_id = str(row["id"])
         result.append(
             {
-                "id": str(row["id"]),
+                "id": session_id,
                 "updated": str(row["updated_at"]),
                 "status": str(metadata.get("status", "unknown")),
                 "task": task,
                 "workspace": workspace,
                 "workspace_label": label,
                 "mode": str(metadata.get("mode", "build")),
+                "running": session_id in active,
             }
         )
     return result
@@ -427,7 +442,11 @@ def create_app(
 
     @app.get("/api/sessions")
     def list_sessions(demo: bool = False) -> dict[str, Any]:
-        return {"sessions": session_rows(runtime.database_path, demo=demo)}
+        rows = session_rows(runtime.database_path, demo=demo)
+        for item in rows:
+            live = runtime.service.running(str(item["id"]))
+            item["running"] = live is not None and not live.task.done()
+        return {"sessions": rows}
 
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: str, demo: bool = False) -> dict[str, Any]:
@@ -617,6 +636,33 @@ def create_app(
         except KeyError as exc:
             raise _error(404, f"unknown session: {session_id}") from exc
         return {"deleted": True}
+
+    @app.get("/api/sessions/{session_id}/export")
+    def export_session(session_id: str) -> Response:
+        try:
+            bundle = export_session_bundle(runtime.database_path, session_id)
+        except SessionBundleError as exc:
+            raise _error(404, str(exc)) from exc
+        filename = bundle_filename(bundle)
+        return Response(
+            content=dump_bundle_json(bundle),
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.post("/api/sessions/import")
+    async def import_session(request: Request) -> dict[str, str]:
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise _error(400, "无法解析 JSON 文件") from exc
+        if not isinstance(payload, dict):
+            raise _error(400, "文件内容必须是 JSON 对象")
+        try:
+            session_id = import_session_bundle(runtime.database_path, payload)
+        except SessionBundleError as exc:
+            raise _error(400, str(exc)) from exc
+        return {"session_id": session_id}
 
     @app.post("/api/workspace/pick")
     async def pick_workspace() -> dict[str, str | None]:

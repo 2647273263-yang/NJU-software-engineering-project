@@ -72,6 +72,30 @@ def event_to_view(
                 "warning",
                 process=True,
             )
+        if error == "interactive_command":
+            return TimelineItem(
+                event.kind,
+                "交互程序请在右侧终端运行",
+                summary
+                or "单独输入 python 会打开交互环境。请改成 python 某个.py，或到右侧终端操作。",
+                "warning",
+                process=True,
+            )
+        if error == "timeout":
+            arguments = payload.get("arguments")
+            args = arguments if isinstance(arguments, dict) else {}
+            command = str(args.get("command") or "").strip().replace("\n", " ")
+            if len(command) > 40:
+                command = command[:37] + "…"
+            target = command or "这项操作"
+            return TimelineItem(
+                event.kind,
+                f"{target} 超时被停",
+                summary or "超过限定时间后已停止。可以点「接着试」再跑一次。",
+                "warning",
+                process=True,
+                path=_changed_path(payload),
+            )
         detail = summary or f"{duration} 毫秒"
         if error and error not in detail:
             detail = f"{detail} · {error}"
@@ -225,10 +249,11 @@ def event_to_view(
     if event.kind == "run_finished":
         status = str(payload.get("status", "finished"))
         steps = payload.get("steps")
-        detail = f"{steps} 步" if steps is not None else ""
+        summary = str(payload.get("summary") or "")
+        title, detail = _finish_text(status, summary, steps)
         return TimelineItem(
             event.kind,
-            f"运行{_status_text(status)}",
+            title,
             detail,
             "success" if status == "completed" else "warning",
             process=True,
@@ -292,3 +317,22 @@ def _status_text(status: str) -> str:
         "cancelled": "已取消",
         "stopped": "已停止",
     }.get(status, status)
+
+
+def _finish_text(status: str, summary: str, steps: Any) -> tuple[str, str]:
+    lower = summary.lower()
+    step_bit = f"{steps} 步。 " if steps is not None else ""
+    if "timeout" in lower or "timed out" in lower:
+        return (
+            "读模型超时",
+            f"{step_bit}模型在限定时间内没有返回。点「接着试」会重发上一句，而不是另写一句继续。",
+        )
+    if status == "cancelled":
+        return "已停止", f"{step_bit}已按你的操作停下。点「接着试」会重发上一句。"
+    if status == "stopped":
+        return "已中断", f"{step_bit}{summary or '任务中途停下。点「接着试」会重发上一句。'}"
+    if status == "failed":
+        return "这次没跑完", f"{step_bit}{summary or '运行失败。点「接着试」会重发上一句。'}"
+    if status == "completed":
+        return "运行已完成", step_bit.strip()
+    return f"运行{_status_text(status)}", f"{step_bit}{summary}".strip()

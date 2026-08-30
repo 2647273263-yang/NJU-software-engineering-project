@@ -523,11 +523,11 @@ def _push_current_branch(git: str, workspace: Path, branch: str) -> _Run:
         raise GitWorkspaceError("拒绝推送危险引用")
     args = ["push", "-u", "origin", spec]
     attempts: list[tuple[dict[str, str], dict[str, str] | None]] = [
-        ({"http.version": "HTTP/1.1"}, None),
         (
             {"http.version": "HTTP/1.1", "http.proxy": "", "https.proxy": ""},
             _env_without_proxy(),
         ),
+        ({"http.version": "HTTP/1.1"}, None),
     ]
     last: _Run | None = None
     for config, env in attempts:

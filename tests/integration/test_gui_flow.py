@@ -112,15 +112,8 @@ async def test_gui_approval_pauses_without_blocking_event_loop(tmp_path: Path) -
 
     assert pending
     assert not running.task.done()
+    assert pending[0].call.name == "write_file"
     assert service.approvals.resolve(pending[0].id, True)
-    second = []
-    for _ in range(100):
-        second = service.approvals.pending(running.id)
-        if second and second[0].id != pending[0].id:
-            break
-        await asyncio.sleep(0.01)
-    assert second
-    assert service.approvals.resolve(second[0].id, True)
     result = await running.task
 
     assert result.status is AgentStatus.COMPLETED

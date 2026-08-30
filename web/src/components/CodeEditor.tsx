@@ -59,23 +59,35 @@ function selectionOf(value: string, start: number, end: number): EditorSelection
   };
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function FindBar({
   query,
   setQuery,
+  replace,
+  setReplace,
   matchIndex,
   matchCount,
   onJump,
+  onReplace,
+  onReplaceAll,
   onClose,
 }: {
   query: string;
   setQuery: (value: string) => void;
+  replace: string;
+  setReplace: (value: string) => void;
   matchIndex: number;
   matchCount: number;
   onJump: (index: number) => void;
+  onReplace: () => void;
+  onReplaceAll: () => void;
   onClose: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 border-b border-border px-2 py-1">
+    <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-1">
       <input
         autoFocus
         value={query}
@@ -88,7 +100,20 @@ function FindBar({
           }
           if (event.key === "Escape") onClose();
         }}
-        className="h-7 min-w-0 flex-1 rounded border border-border bg-transparent px-2 text-[12px] outline-none"
+        className="h-7 min-w-[8rem] flex-1 rounded border border-border bg-transparent px-2 text-[12px] outline-none"
+      />
+      <input
+        value={replace}
+        placeholder="替换为"
+        onChange={(event) => setReplace(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onReplace();
+          }
+          if (event.key === "Escape") onClose();
+        }}
+        className="h-7 min-w-[8rem] flex-1 rounded border border-border bg-transparent px-2 text-[12px] outline-none"
       />
       <span className="shrink-0 text-[11px] text-muted-foreground">
         {matchCount ? `${matchIndex + 1}/${matchCount}` : "无匹配"}
@@ -98,6 +123,12 @@ function FindBar({
       </button>
       <button type="button" className="text-[11px] text-muted-foreground" onClick={() => onJump(matchIndex + 1)}>
         下一个
+      </button>
+      <button type="button" className="text-[11px] text-muted-foreground" onClick={onReplace}>
+        替换
+      </button>
+      <button type="button" className="text-[11px] text-muted-foreground" onClick={onReplaceAll}>
+        全部替换
       </button>
     </div>
   );
@@ -130,6 +161,7 @@ export function CodeEditor({
   const highlight = useRef<HTMLPreElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
+  const [replace, setReplace] = useState("");
   const [findOpen, setFindOpen] = useState(false);
   const [matchIndex, setMatchIndex] = useState(0);
   const [selection, setSelection] = useState<EditorSelection | null>(null);
@@ -198,6 +230,23 @@ export function CodeEditor({
     syncScroll();
   }
 
+  function openFind() {
+    setFindOpen(true);
+  }
+
+  function replaceCurrent() {
+    if (!query || matches.length === 0) return;
+    const start = matches[matchIndex] ?? 0;
+    const source = value.slice(start, start + query.length);
+    const next = `${value.slice(0, start)}${replace}${value.slice(start + source.length)}`;
+    onChange(next);
+  }
+
+  function replaceAll() {
+    if (!query) return;
+    onChange(value.replace(new RegExp(escapeRegExp(query), "gi"), replace));
+  }
+
   function onPlainKey(event: KeyboardEvent<HTMLTextAreaElement>) {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -205,7 +254,11 @@ export function CodeEditor({
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
-      setFindOpen(true);
+      openFind();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "h") {
+      event.preventDefault();
+      openFind();
     }
   }
 
@@ -223,7 +276,12 @@ export function CodeEditor({
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
-      setFindOpen(true);
+      openFind();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "h") {
+      event.preventDefault();
+      openFind();
       return;
     }
     if (event.key === "Enter" && !event.shiftKey) {
@@ -277,9 +335,13 @@ export function CodeEditor({
     <FindBar
       query={query}
       setQuery={setQuery}
+      replace={replace}
+      setReplace={setReplace}
       matchIndex={matchIndex}
       matchCount={matches.length}
       onJump={jumpTo}
+      onReplace={replaceCurrent}
+      onReplaceAll={replaceAll}
       onClose={() => setFindOpen(false)}
     />
   ) : null;

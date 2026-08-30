@@ -127,7 +127,14 @@ class OpenAICompatibleClient:
     @staticmethod
     def _serialize_message(message: Message) -> dict[str, Any]:
         payload: dict[str, Any] = {"role": message.role}
-        if message.content is not None:
+        if message.attachments:
+            parts: list[dict[str, Any]] = []
+            if message.content:
+                parts.append({"type": "text", "text": message.content})
+            for url in message.attachments:
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+            payload["content"] = parts
+        elif message.content is not None:
             payload["content"] = message.content
         elif message.tool_calls:
             payload["content"] = None

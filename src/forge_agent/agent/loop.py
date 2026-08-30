@@ -173,7 +173,7 @@ class AgentLoop:
                     ),
                 )
             )
-            self._append_message(Message(role="user", content=task))
+            self._append_message(self._user_turn(task))
         else:
             self.messages = list(history)
             current_system = Message(
@@ -189,7 +189,7 @@ class AgentLoop:
             else:
                 self.messages.insert(0, current_system)
             self.messages = repair_tool_history(self.messages)
-            self._append_message(Message(role="user", content=task))
+            self._append_message(self._user_turn(task))
         self.on_event("run_started", {"task": task, "mode": self.config.mode.value})
         overflow_recovered = False
 
@@ -580,6 +580,13 @@ class AgentLoop:
             },
         )
         return exhausted
+
+    def _user_turn(self, task: str) -> Message:
+        return Message(
+            role="user",
+            content=task,
+            attachments=list(self.config.user_image_data_urls),
+        )
 
     def _append_message(self, message: Message) -> None:
         self.messages.append(message)

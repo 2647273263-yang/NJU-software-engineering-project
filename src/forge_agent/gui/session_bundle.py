@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -12,7 +14,9 @@ from forge_agent.storage.sqlite import SQLiteStorage
 from forge_agent.types import Message
 
 BUNDLE_FORMAT = "forge-agent.session"
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2
+_SUPPORTED_VERSIONS = frozenset({1, 2})
+_MAX_BACKUP_BYTES = 5_000_000
 
 
 class SessionBundleError(ValueError):
@@ -89,6 +93,7 @@ def export_session_bundle(database_path: Path, session_id: str) -> dict[str, Any
             ],
             "claims": claims_out,
             "compactions": compaction_out,
+            "edit_transactions": _export_edits(storage, record.id),
         }
 
 
@@ -100,8 +105,8 @@ def bundle_filename(bundle: dict[str, Any]) -> str:
 def import_session_bundle(database_path: Path, payload: dict[str, Any]) -> str:
     if payload.get("format") != BUNDLE_FORMAT:
         raise SessionBundleError("这不是 ForgeAgent 会话导出文件")
-    version = payload.get("version", BUNDLE_VERSION)
-    if version != BUNDLE_VERSION:
+    version = payload.get("version", 1)
+    if version not in _SUPPORTED_VERSIONS:
         raise SessionBundleError(f"不支持的导出版本：{version}")
     session_block = payload.get("session")
     if not isinstance(session_block, dict):
@@ -188,9 +193,99 @@ def import_session_bundle(database_path: Path, payload: dict[str, Any]) -> str:
                     summary=summary,
                     retained_from_message_id=retained_id,
                 )
+            _import_edits(storage, created.id, payload.get("edit_transactions") or [])
             return created.id
 
 
 def dump_bundle_json(bundle: dict[str, Any]) -> bytes:
     text = json.dumps(bundle, ensure_ascii=False, indent=2)
     return (text + "\n").encode("utf-8")
+
+
+def _export_edits(storage: SQLiteStorage, session_id: str) -> list[dict[str, Any]]:
+    exported: list[dict[str, Any]] = []
+    for transaction in storage.list_edit_transactions(session_id):
+        snapshots_out: list[dict[str, Any]] = []
+        for snapshot in storage.list_snapshots(transaction.id):
+            metadata = dict(snapshot.metadata)
+            backup_b64 = None
+            backup = metadata.get("backup_path")
+            if isinstance(backup, str) and backup:
+                path = Path(backup)
+                if path.is_file() and path.stat().st_size <= _MAX_BACKUP_BYTES:
+                    backup_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+            metadata.pop("backup_path", None)
+            snapshots_out.append(
+                {
+                    "path": snapshot.path,
+                    "metadata": metadata,
+                    "backup_b64": backup_b64,
+                }
+            )
+        exported.append(
+            {
+                "id": transaction.id,
+                "status": transaction.status,
+                "metadata": dict(transaction.metadata),
+                "snapshots": snapshots_out,
+            }
+        )
+    return exported
+
+
+def _remap_edit_metadata(metadata: dict[str, Any], id_map: dict[int, int]) -> dict[str, Any]:
+    updated = dict(metadata)
+    rollback = updated.get("rolls_back")
+    if isinstance(rollback, int) and rollback in id_map:
+        updated["rolls_back"] = id_map[rollback]
+    many = updated.get("rolls_back_many")
+    if isinstance(many, list):
+        updated["rolls_back_many"] = [
+            id_map[item] if isinstance(item, int) and item in id_map else item for item in many
+        ]
+    return updated
+
+
+def _import_edits(storage: SQLiteStorage, session_id: str, rows: Any) -> None:
+    if not isinstance(rows, list):
+        return
+    snapshot_root = storage.path.parent / "snapshots" / session_id
+    id_map: dict[int, int] = {}
+    prepared: list[tuple[int, dict[str, Any]]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        created = storage.create_edit_transaction(session_id, metadata={})
+        old_id = raw.get("id")
+        if isinstance(old_id, int):
+            id_map[old_id] = created.id
+        prepared.append((created.id, raw))
+    for new_id, raw in prepared:
+        snapshots = raw.get("snapshots") or []
+        if isinstance(snapshots, list):
+            for item in snapshots:
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path") or "")
+                if not path:
+                    continue
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                meta = dict(metadata)
+                encoded = item.get("backup_b64")
+                if isinstance(encoded, str) and encoded:
+                    directory = snapshot_root / str(new_id)
+                    directory.mkdir(parents=True, exist_ok=True)
+                    backup = directory / f"{hashlib.sha256(path.encode()).hexdigest()}.bak"
+                    backup.write_bytes(base64.b64decode(encoded, validate=False))
+                    meta["backup_path"] = str(backup)
+                    meta["existed"] = True
+                storage.save_snapshot(new_id, path, meta)
+        status = str(raw.get("status") or "completed")
+        if status == "open":
+            status = "completed"
+        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+        storage.complete_edit_transaction(
+            new_id,
+            status=status,
+            metadata=_remap_edit_metadata(dict(metadata), id_map),
+        )

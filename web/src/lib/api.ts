@@ -26,6 +26,7 @@ export type StartRunInput = {
   max_cost: number | null;
   auto_approve: boolean;
   demo: boolean;
+  images?: string[];
 };
 
 export const api = {
@@ -94,7 +95,9 @@ export const api = {
       path: string;
       content: string;
       binary: boolean;
+      image?: boolean;
       truncated: boolean;
+      encoding?: string | null;
       diff: string | null;
     }>(
       fetch(
@@ -138,6 +141,27 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace, path, to }),
+      }),
+    ),
+  mkdir: (workspace: string, path: string) =>
+    parse<{ ok: boolean; summary: string; error_code: string | null; path?: string }>(
+      fetch("/api/workspace/mkdir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, path }),
+      }),
+    ),
+  uploadImage: (workspace: string, filename: string, dataBase64: string, mime: string) =>
+    parse<{ ok: boolean; summary: string; error_code: string | null; path?: string }>(
+      fetch("/api/workspace/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace,
+          filename,
+          data_base64: dataBase64,
+          mime,
+        }),
       }),
     ),
   deleteSession: (id: string) =>

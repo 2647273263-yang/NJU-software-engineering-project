@@ -39,6 +39,7 @@ class Message(BaseModel):
     content: str | None = None
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    attachments: list[str] = Field(default_factory=list)
 
 
 class TokenUsage(BaseModel):

@@ -153,8 +153,20 @@ class LiveTerminal:
         env["TERM"] = "xterm-256color"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        python_dir = str(Path(sys.executable).resolve().parent)
+        path_key = "Path" if "Path" in env and "PATH" not in env else "PATH"
+        env[path_key] = python_dir + os.pathsep + env.get(path_key, "")
         self._proc = PtyProcess.spawn(
-            [exe, "-NoLogo", "-NoProfile"],
+            [
+                exe,
+                "-NoLogo",
+                "-NoProfile",
+                "-NoExit",
+                "-Command",
+                "chcp 65001 >$null; "
+                "[Console]::InputEncoding = [Console]::OutputEncoding = "
+                "[System.Text.UTF8Encoding]::new($false)",
+            ],
             cwd=str(self.workspace),
             dimensions=(rows, cols),
             env=env,

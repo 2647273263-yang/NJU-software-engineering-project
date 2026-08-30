@@ -45,12 +45,15 @@ from forge_agent.gui.workspace_git import (
 from forge_agent.gui.workspace_ops import (
     accepted_diffs_from_metadata,
     apply_session_settings,
+    create_workspace_dir,
     create_workspace_file,
     delete_workspace_path,
+    image_data_urls,
     latest_diff_for_path,
     pick_directory,
     read_workspace_file,
     rename_workspace_path,
+    save_uploaded_image,
     session_settings_from_metadata,
     undo_path,
     workspace_tree,
@@ -90,6 +93,7 @@ class StartRunBody(BaseModel):
     max_cost: float | None = Field(default=None, gt=0)
     auto_approve: bool = False
     demo: bool = False
+    images: list[str] = Field(default_factory=list)
 
 
 class ResumeBody(BaseModel):
@@ -103,6 +107,7 @@ class ResumeBody(BaseModel):
     max_cost: float | None = Field(default=None, gt=0)
     auto_approve: bool = False
     demo: bool = False
+    images: list[str] = Field(default_factory=list)
 
 
 class RollbackBody(BaseModel):
@@ -138,6 +143,13 @@ class SaveFileBody(BaseModel):
 class WorkspacePathBody(BaseModel):
     workspace: str
     path: str = Field(min_length=1)
+
+
+class UploadImageBody(BaseModel):
+    workspace: str
+    filename: str = ""
+    data_base64: str = Field(min_length=1)
+    mime: str = ""
 
 
 class RenamePathBody(BaseModel):
@@ -231,6 +243,7 @@ def build_run_config(
     max_tokens: int,
     max_cost: float | None,
     auto_approve: bool,
+    images: list[str] | None = None,
 ) -> RunConfig:
     api_key = os.environ.get("FORGE_API_KEY")
     if not api_key:
@@ -252,6 +265,7 @@ def build_run_config(
         output_cost_per_million=float(os.environ.get("FORGE_OUTPUT_COST_PER_MILLION", "0")),
         stream_model=True,
         auto_approve=auto_approve,
+        user_image_data_urls=image_data_urls(Path(workspace), images or []),
     )
 
 
@@ -280,7 +294,7 @@ def session_rows(
     active = running_ids or set()
     with SQLiteStorage(database_path) as storage:
         rows = storage.connection.execute(
-            "SELECT id, updated_at, metadata_json FROM sessions ORDER BY updated_at DESC LIMIT 40"
+            "SELECT id, updated_at, metadata_json FROM sessions ORDER BY updated_at DESC LIMIT 200"
         ).fetchall()
     result: list[dict[str, Any]] = []
     for row in rows:
@@ -355,8 +369,11 @@ def persist_user_message(
     events: EventBus,
     session_id: str,
     text: str,
+    images: list[str] | None = None,
 ) -> None:
-    payload = {"text": text}
+    payload: dict[str, Any] = {"text": text}
+    if images:
+        payload["images"] = [item for item in images if item]
     with SQLiteStorage(database_path) as storage:
         storage.append_event(session_id, "user_message", payload)
     events.publish(session_id, "user_message", payload)
@@ -557,6 +574,7 @@ def create_app(
                 max_tokens=body.max_tokens,
                 max_cost=body.max_cost,
                 auto_approve=body.auto_approve,
+                images=body.images,
             )
         except (ValueError, ValidationError) as exc:
             raise _error(400, str(exc)) from exc
@@ -575,7 +593,13 @@ def create_app(
                 "demo": body.demo,
             },
         )
-        persist_user_message(runtime.database_path, runtime.events, running.id, body.task)
+        persist_user_message(
+            runtime.database_path,
+            runtime.events,
+            running.id,
+            body.task,
+            body.images,
+        )
         return {"session_id": running.id}
 
     @app.post("/api/sessions/{session_id}/resume")
@@ -596,6 +620,7 @@ def create_app(
                 max_tokens=body.max_tokens,
                 max_cost=body.max_cost,
                 auto_approve=body.auto_approve,
+                images=body.images,
             )
             running = runtime.service.resume(config, session_id, body.instruction)
         except KeyError as exc:
@@ -616,7 +641,13 @@ def create_app(
                 "demo": body.demo,
             },
         )
-        persist_user_message(runtime.database_path, runtime.events, running.id, body.instruction)
+        persist_user_message(
+            runtime.database_path,
+            runtime.events,
+            running.id,
+            body.instruction,
+            body.images,
+        )
         return {"session_id": running.id}
 
     @app.post("/api/sessions/{session_id}/cancel")
@@ -771,6 +802,25 @@ def create_app(
         try:
             return delete_workspace_path(Path(body.workspace), body.path)
         except (ValueError, OSError, FileNotFoundError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/mkdir")
+    def mkdir_path(body: WorkspacePathBody) -> dict[str, Any]:
+        try:
+            return create_workspace_dir(Path(body.workspace), body.path)
+        except (ValueError, OSError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/upload")
+    def upload_image(body: UploadImageBody) -> dict[str, Any]:
+        try:
+            return save_uploaded_image(
+                Path(body.workspace),
+                body.filename,
+                body.data_base64,
+                body.mime,
+            )
+        except (ValueError, OSError) as exc:
             raise _error(400, str(exc)) from exc
 
     @app.post("/api/workspace/rename")

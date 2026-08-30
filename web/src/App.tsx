@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./lib/api";
-import { formatChatPayload, makeChatRef, type ChatRef } from "./lib/chatRefs";
+import { formatChatPayload, imagePathsFromText, imagePathsOf, makeChatRef, type ChatRef } from "./lib/chatRefs";
 import {
   collectChangedFiles,
   fileFingerprint,
@@ -71,6 +71,7 @@ type OpenDoc = {
   hunks: ChangeBlock[];
   binary: boolean;
   truncated: boolean;
+  image?: boolean;
   stale: boolean;
   incoming: string | null;
   missing?: boolean;
@@ -118,6 +119,7 @@ function groupEvents(events: SessionEvent[], streamText: string): ChatBlock[] {
   for (const event of events) {
     const view = event.view;
     if (HIDDEN_CHAT_KINDS.has(view.kind)) continue;
+    if (view.kind === "run_finished" && event.payload.status === "completed") continue;
     if (view.kind === "user_message") {
       blocks.push({ type: "user", text: view.detail });
       continue;
@@ -315,6 +317,24 @@ export default function App() {
     }
     return "";
   }, [events]);
+  const lastUserImages = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      if (events[index]?.view.kind !== "user_message") continue;
+      const raw = events[index].payload.images;
+      if (Array.isArray(raw)) return raw.filter((item): item is string => typeof item === "string");
+      return [];
+    }
+    return [] as string[];
+  }, [events]);
+  const liveHint = useMemo(() => {
+    if (!running) return "";
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const view = events[index]?.view;
+      if (view?.kind === "tool_started") return `正在${view.title}`;
+      if (view?.kind === "approval_requested") return view.title;
+    }
+    return STATUS_LABEL[status] ?? "运行中";
+  }, [events, running, status]);
   const canRetry = Boolean(selectedId && !running && lastUserText && RETRY_STATUSES.has(status));
 
   function persistResolved(sessionId: string | null, value: Record<string, string>) {
@@ -417,6 +437,7 @@ export default function App() {
         diff: hidden ? null : (data.diff ?? file?.diff ?? null),
         hunks: hidden ? [] : parseChangeBlocks(data.diff ?? file?.diff ?? null),
         binary: data.binary,
+        image: Boolean(data.image),
         truncated: data.truncated,
         stale: false,
         incoming: null,
@@ -435,6 +456,7 @@ export default function App() {
           diff: pending.diff,
           hunks: parseChangeBlocks(pending.diff),
           binary: false,
+          image: false,
           truncated: false,
           stale: false,
           incoming: null,
@@ -503,6 +525,7 @@ export default function App() {
               content: data.content,
               draft: data.content,
               binary: data.binary,
+              image: Boolean(data.image),
               truncated: data.truncated,
               diff: hidden ? null : data.diff,
               hunks: hidden ? [] : parseChangeBlocks(data.diff),
@@ -688,7 +711,7 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, [anyDirty]);
 
-  function runPayload(text: string) {
+  function runPayload(text: string, images: string[] = []) {
     return {
       task: text,
       instruction: text,
@@ -701,11 +724,13 @@ export default function App() {
       max_cost: costValue(settings.max_cost),
       auto_approve: settings.auto_approve,
       demo: settings.demo,
+      images,
     };
   }
 
-  async function submit(event?: FormEvent, rawText?: string) {
+  async function submit(event?: FormEvent, rawText?: string, images?: string[]) {
     event?.preventDefault();
+    const attached = images ?? imagePathsOf(chatRefs);
     const text = (rawText ?? formatChatPayload(task, chatRefs)).trim();
     if (!text || running) return;
     if (!settings.workspace) {
@@ -716,7 +741,7 @@ export default function App() {
     const userEvent: SessionEvent = {
       session_id: selectedId ?? "pending",
       kind: "user_message",
-      payload: { text },
+      payload: { text, images: attached },
       created_at: new Date().toISOString(),
       view: {
         kind: "user_message",
@@ -737,7 +762,7 @@ export default function App() {
         setStatus("initializing");
         setTask("");
         setChatRefs([]);
-        await api.resume(selectedId, runPayload(text));
+        await api.resume(selectedId, runPayload(text, attached));
       } else {
         setEvents([userEvent]);
         setClaims([]);
@@ -746,7 +771,7 @@ export default function App() {
         setStatus("initializing");
         setTask("");
         setChatRefs([]);
-        const result = await api.start(runPayload(text));
+        const result = await api.start(runPayload(text, attached));
         setSelectedId(result.session_id);
       }
       await refreshSessions();
@@ -798,8 +823,35 @@ export default function App() {
     if (!canRetry) return;
     await submit(
       undefined,
-      "请继续完成上一条用户任务。若已部分完成，从中断处接着做，不要重复已经完成的步骤。",
+      lastUserText,
+      lastUserImages.length > 0 ? lastUserImages : imagePathsFromText(lastUserText),
     );
+  }
+
+  async function onComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(event.clipboardData?.items ?? []);
+    const imageItem = items.find((item) => item.type.startsWith("image/"));
+    if (!imageItem || !settings.workspace) return;
+    const file = imageItem.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("无法读取截图"));
+      reader.readAsDataURL(file);
+    });
+    try {
+      const result = await api.uploadImage(settings.workspace, file.name || "clip.png", dataUrl, file.type);
+      if (!result.ok || !result.path) {
+        setError(result.summary || "保存截图失败");
+        return;
+      }
+      addChatRef(makeChatRef(result.path, { kind: "image", preview: dataUrl }));
+      setError("");
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "保存截图失败");
+    }
   }
 
   async function changeWorkspace() {
@@ -1068,15 +1120,17 @@ export default function App() {
     });
   }
 
-  async function createWorkspaceFile() {
-    const relative = window.prompt("新文件的相对路径（相对工作区）", "");
-    if (!relative?.trim() || !settings.workspace) return;
-    const path = relative.trim().replaceAll("\\", "/");
-    const result = await api.createFile(settings.workspace, path);
+  async function createWorkspaceItem(path: string, kind: "file" | "dir") {
+    if (!path.trim() || !settings.workspace) return;
+    const relative = path.trim().replaceAll("\\", "/");
+    const result =
+      kind === "dir"
+        ? await api.mkdir(settings.workspace, relative)
+        : await api.createFile(settings.workspace, relative);
     setError(result.ok ? "" : result.summary);
     if (result.ok) {
       await refreshTree();
-      await openWorkspaceFile(path);
+      if (kind === "file") await openWorkspaceFile(relative);
     }
   }
 
@@ -1335,7 +1389,7 @@ export default function App() {
                 (status === "failed" || status === "cancelled" || status === "stopped") && "text-red-400",
               )}
             >
-              {STATUS_LABEL[status] ?? status}
+              {running && liveHint ? liveHint : (STATUS_LABEL[status] ?? status)}
             </div>
           </div>
         </header>
@@ -1534,6 +1588,9 @@ export default function App() {
         ) : null}
 
         {error ? <div className="mx-auto mb-2 w-full max-w-[720px] text-[12.5px] text-red-400">{error}</div> : null}
+        {running && liveHint ? (
+          <div className="mx-auto mb-2 w-full max-w-[720px] text-[12.5px] text-muted-foreground">{liveHint}</div>
+        ) : null}
 
         <form onSubmit={(event) => void submit(event)} className="px-4 pb-4">
           <div className="mx-auto max-w-[720px] rounded-2xl border border-border bg-[#1a1a1a] p-2 shadow-[0_8px_30px_rgba(0,0,0,.25)]">
@@ -1544,10 +1601,15 @@ export default function App() {
                     key={ref.id}
                     className="flex max-w-full items-center gap-1 rounded-full border border-border bg-white/5 px-2 py-0.5 text-[11px]"
                   >
-                    <span className="truncate">
-                      {ref.startLine
-                        ? `${ref.path}:${ref.startLine}${ref.endLine && ref.endLine !== ref.startLine ? `-${ref.endLine}` : ""}`
-                        : ref.path}
+                    <span className="flex items-center gap-1 truncate">
+                      {ref.kind === "image" && ref.preview ? (
+                        <img src={ref.preview} alt="" className="h-5 w-5 rounded object-cover" />
+                      ) : null}
+                      {ref.kind === "image"
+                        ? "截图"
+                        : ref.startLine
+                          ? `${ref.path}:${ref.startLine}${ref.endLine && ref.endLine !== ref.startLine ? `-${ref.endLine}` : ""}`
+                          : ref.path}
                     </span>
                     <button
                       type="button"
@@ -1564,8 +1626,13 @@ export default function App() {
               value={task}
               onChange={(event) => setTask(event.target.value)}
               onKeyDown={onComposerKey}
+              onPaste={(event) => void onComposerPaste(event)}
               rows={1}
-              placeholder={selectedId ? "继续此会话，或描述下一步… @ 插入文件，Shift+Enter 换行" : "输入编程任务，@ 插入文件，Enter 发送"}
+              placeholder={
+                selectedId
+                  ? "继续此会话… @ 插文件，Ctrl+V 可贴截图，Shift+Enter 换行"
+                  : "输入编程任务，@ 插文件，Ctrl+V 可贴截图，Enter 发送"
+              }
               className="max-h-40 min-h-[44px] w-full resize-none bg-transparent px-2 py-2 text-[14px] outline-none placeholder:text-muted-foreground"
             />
             <div className="flex items-center justify-between px-1 pb-0.5">
@@ -1669,7 +1736,7 @@ export default function App() {
                   active={openFile?.path ?? null}
                   changed={changedPaths}
                   onOpen={(path) => void openWorkspaceFile(path)}
-                  onCreate={() => void createWorkspaceFile()}
+                  onCreate={(path, kind) => void createWorkspaceItem(path, kind)}
                   onRename={(from, to) => void renameWorkspaceItem(from, to)}
                   onDelete={(path, kind) => void deleteWorkspaceItem(path, kind)}
                 />
@@ -1776,10 +1843,17 @@ export default function App() {
                         文件已被 Agent 删除。接受将保持删除；撤销可恢复到删除前。
                       </p>
                     ) : null}
-                    {openFile.binary || openFile.truncated ? (
-                      <p className="p-3 text-[12px] text-muted-foreground">
-                        {openFile.binary ? "二进制文件无法在此编辑。" : "文件过大，未加载全部内容。"}
-                      </p>
+                    {openFile.image && openFile.content.startsWith("data:") ? (
+                      <div className="min-h-0 flex-1 overflow-auto p-3">
+                        <img src={openFile.content} alt={openFile.path} className="max-w-full rounded border border-border" />
+                      </div>
+                    ) : openFile.binary ? (
+                      <p className="p-3 text-[12px] text-muted-foreground">二进制文件无法在此编辑。</p>
+                    ) : openFile.truncated ? (
+                      <div className="min-h-0 flex-1 overflow-auto p-3">
+                        <p className="mb-2 text-[12px] text-muted-foreground">文件过大，只显示开头，不能在此保存。</p>
+                        <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5">{openFile.content}</pre>
+                      </div>
                     ) : (
                       <CodeEditor
                         path={openFile.path}
@@ -1795,7 +1869,7 @@ export default function App() {
                   </>
                 ) : (
                   <p className="p-3 text-[12px] text-muted-foreground">
-                    点击左侧文件即可编辑。Ctrl+P 搜索文件，Ctrl+S 保存你的手改，Ctrl+F 在文件里查找。选中代码后可向 Agent 提问。
+                    点击左侧文件即可编辑。Ctrl+P 搜索文件，Ctrl+S 保存，Ctrl+F 查找，Ctrl+H 替换。可在当前目录右键新建文件。选中代码后可向 Agent 提问。对话里可粘贴截图。
                   </p>
                 )}
               </div>

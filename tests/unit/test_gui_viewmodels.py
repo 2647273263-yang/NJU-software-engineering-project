@@ -183,6 +183,38 @@ def test_final_model_text_is_an_answer_not_run_status() -> None:
     assert git_missing.process is True
 
 
+def test_timeout_and_interactive_failures_are_plain_chinese() -> None:
+    timeout = event_to_view(
+        event(
+            "tool_finished",
+            {
+                "name": "run_command",
+                "ok": False,
+                "error_code": "timeout",
+                "summary": "command timed out",
+                "arguments": {"command": "python -m pytest -q"},
+            },
+        )
+    )
+    interactive = event_to_view(
+        event(
+            "tool_finished",
+            {
+                "name": "run_command",
+                "ok": False,
+                "error_code": "interactive_command",
+                "summary": "交互式程序不会在 Agent 里启动。",
+            },
+        )
+    )
+    model_timeout = event_to_view(
+        event("run_finished", {"status": "failed", "steps": 2, "summary": "timeout: model request timed out"})
+    )
+    assert "超时" in timeout.title
+    assert interactive.title.startswith("交互")
+    assert model_timeout.title == "读模型超时"
+
+
 def test_model_text_with_tool_calls_is_still_an_answer() -> None:
     view = event_to_view(
         event(

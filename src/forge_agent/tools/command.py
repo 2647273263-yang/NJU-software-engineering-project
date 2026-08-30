@@ -98,7 +98,10 @@ class CommandTools:
         if interactive_reason is not None:
             return ToolResult(
                 ok=False,
-                summary="interactive command requires a TTY and was not started",
+                summary=(
+                    "单独输入 python 会打开交互环境，Agent 里不会启动，否则会一直等你打字。"
+                    "请改成 `python 某个.py` 或 `python -c ...`；右侧终端可以跑脚本，也可以进 REPL。"
+                ),
                 error_code="interactive_command",
                 metadata={
                     "command": safe_command,
@@ -334,6 +337,8 @@ class CommandTools:
     @staticmethod
     def _has_repl_input(arguments: list[str]) -> bool:
         if any(argument in _NON_INTERACTIVE_OPTIONS for argument in arguments):
+            return True
+        if any(argument.endswith((".py", ".pyw")) for argument in arguments):
             return True
         return any(not argument.startswith("-") for argument in arguments)
 

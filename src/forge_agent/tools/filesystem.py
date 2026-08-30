@@ -112,6 +112,10 @@ def iter_visible_paths(
     yield from sorted(discovered, key=lambda item: item.as_posix())
 
 
+_TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+
 def _looks_binary(data: bytes) -> bool:
     sample = data[:8_192]
     if b"\0" in sample:
@@ -120,6 +124,19 @@ def _looks_binary(data: bytes) -> bool:
         return False
     control_bytes = sum(byte < 9 or 13 < byte < 32 for byte in sample)
     return control_bytes / len(sample) > 0.30
+
+
+def decode_bytes(data: bytes) -> tuple[str, str]:
+    for encoding in _TEXT_ENCODINGS:
+        try:
+            return data.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace"), "utf-8"
+
+
+def is_image_path(path: str | Path) -> bool:
+    return Path(path).suffix.lower() in _IMAGE_SUFFIXES
 
 
 def _diff(
@@ -169,12 +186,16 @@ class FileTools:
             raise IsADirectoryError(args.path)
         self.sandbox.deny_sensitive_content(path)
         data = path.read_bytes()
+        if is_image_path(path):
+            return ToolResult(
+                ok=True,
+                summary=f"{args.path} 是图片，已作为二进制文件跳过文本读取。若用户刚贴进对话，请直接根据附图理解报错。",
+                content="",
+                metadata={"image": True, "bytes": len(data)},
+            )
         if _looks_binary(data):
             raise ValueError(f"binary file cannot be read as text: {args.path}")
-        try:
-            full_content = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f"file is not valid UTF-8: {args.path}") from exc
+        full_content, encoding = decode_bytes(data)
 
         lines = full_content.splitlines()
         requested_end = args.end_line if args.end_line is not None else len(lines)
@@ -198,6 +219,7 @@ class FileTools:
                 "start_line": args.start_line,
                 "end_line": actual_end,
                 "total_lines": len(lines),
+                "encoding": encoding,
             },
         )
 

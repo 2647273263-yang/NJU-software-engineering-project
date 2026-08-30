@@ -144,7 +144,6 @@ export const FILE_WRITE_TOOLS = new Set(["write_file", "replace_in_file", "delet
 
 export const HIDDEN_CHAT_KINDS = new Set([
   "model_delta",
-  "run_finished",
   "workspace_summary",
   "context_prepared",
   "context_compacted",

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,12 +16,22 @@ from forge_agent.agent.tool_runtime import PersistentToolRuntime
 from forge_agent.safety import PolicyEngine, PolicyToolRuntime
 from forge_agent.storage import SQLiteStorage
 from forge_agent.tools import build_default_registry
-from forge_agent.tools.filesystem import iter_visible_paths
+from forge_agent.tools.filesystem import decode_bytes, is_image_path, iter_visible_paths
 from forge_agent.tools.workspace import WorkspaceSandbox
 from forge_agent.types import RunMode
 
 _MAX_TREE = 1_500
-_MAX_FILE_BYTES = 400_000
+_MAX_FILE_BYTES = 2_000_000
+_PREVIEW_BYTES = 400_000
+_MAX_IMAGE_BYTES = 5_000_000
+_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
 
 
 def pick_directory() -> str | None:
@@ -101,28 +115,50 @@ def read_workspace_file(
     if not path.is_file():
         raise ValueError(f"not a file: {relative}")
     size = path.stat().st_size
-    if size > _MAX_FILE_BYTES:
+    if is_image_path(path):
+        if size > _MAX_IMAGE_BYTES:
+            return {
+                "path": relative,
+                "content": "",
+                "binary": True,
+                "image": False,
+                "truncated": True,
+                "encoding": None,
+                "diff": diff,
+            }
+        data = path.read_bytes()
+        mime = _IMAGE_MIME.get(path.suffix.lower(), "application/octet-stream")
         return {
             "path": relative,
-            "content": "",
-            "binary": False,
-            "truncated": True,
+            "content": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}",
+            "binary": True,
+            "image": True,
+            "truncated": False,
+            "encoding": None,
             "diff": diff,
         }
-    data = path.read_bytes()
+    data = path.read_bytes() if size <= _MAX_FILE_BYTES else path.read_bytes()[:_PREVIEW_BYTES]
+    truncated = size > _MAX_FILE_BYTES
     if b"\0" in data[:8_192]:
         return {
             "path": relative,
             "content": "",
             "binary": True,
+            "image": False,
             "truncated": False,
+            "encoding": None,
             "diff": diff,
         }
+    text, encoding = decode_bytes(data)
+    if truncated:
+        text = text + "\n…\n[文件过大，只显示开头]"
     return {
         "path": relative,
-        "content": data.decode("utf-8", errors="replace"),
+        "content": text,
         "binary": False,
-        "truncated": False,
+        "image": False,
+        "truncated": truncated,
+        "encoding": encoding,
         "diff": diff,
     }
 
@@ -233,6 +269,80 @@ def create_workspace_file(
         return {"ok": False, "summary": f"{relative} 已存在", "error_code": "exists"}
     sandbox.atomic_write(path, content)
     return {"ok": True, "summary": f"已创建 {relative}", "error_code": None}
+
+
+def create_workspace_dir(workspace: Path, relative: str) -> dict[str, Any]:
+    sandbox = WorkspaceSandbox(workspace)
+    path = sandbox.resolve(relative, must_exist=False)
+    if path.exists() and path.is_file():
+        return {"ok": False, "summary": f"{relative} 已是文件", "error_code": "exists"}
+    path.mkdir(parents=True, exist_ok=True)
+    return {"ok": True, "summary": f"已创建文件夹 {relative}", "error_code": None, "path": sandbox.relative(path)}
+
+
+_UPLOAD_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+_UPLOAD_MAX = 2_000_000
+
+
+def save_uploaded_image(
+    workspace: Path,
+    filename: str,
+    data_base64: str,
+    mime: str = "",
+) -> dict[str, Any]:
+    raw = data_base64.strip()
+    if "," in raw and raw.lower().startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    try:
+        data = base64.b64decode(raw, validate=False)
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "summary": "截图数据无法读取", "error_code": "invalid"}
+    if not data:
+        return {"ok": False, "summary": "截图是空的", "error_code": "empty"}
+    if len(data) > _UPLOAD_MAX:
+        return {"ok": False, "summary": "截图超过 2MB，请缩小后再贴。", "error_code": "too_large"}
+    suffix = Path(filename).suffix.lower()
+    if suffix not in _IMAGE_MIME:
+        guessed = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+            "image/bmp": ".bmp",
+        }.get(mime.lower(), ".png")
+        suffix = guessed
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    digest = hashlib.sha256(data).hexdigest()[:8]
+    stem = _UPLOAD_NAME.sub("-", Path(filename).stem)[:40].strip("-") or "clip"
+    relative = f".forge-uploads/{stamp}-{stem}-{digest}{suffix}"
+    sandbox = WorkspaceSandbox(workspace)
+    path = sandbox.resolve(relative, must_exist=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return {
+        "ok": True,
+        "summary": f"已保存截图 {relative}",
+        "error_code": None,
+        "path": relative,
+    }
+
+
+def image_data_urls(workspace: Path, relatives: list[str]) -> list[str]:
+    sandbox = WorkspaceSandbox(workspace)
+    urls: list[str] = []
+    for relative in relatives[:4]:
+        try:
+            path = sandbox.resolve(relative, must_exist=True)
+        except (ValueError, OSError, FileNotFoundError):
+            continue
+        if not path.is_file() or not is_image_path(path):
+            continue
+        if path.stat().st_size > _UPLOAD_MAX:
+            continue
+        mime = _IMAGE_MIME.get(path.suffix.lower(), "image/png")
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        urls.append(f"data:{mime};base64,{encoded}")
+    return urls
 
 
 def latest_diff_for_path(events: list[Any], relative: str) -> str | None:

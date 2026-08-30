@@ -103,8 +103,9 @@ npm run build
 Then restart `forge-gui`. Frontend development can use `npm run dev` in `web/` while `forge-gui`
 is already running on port 8080.
 
-Demo mode is enabled by default and redacts the workspace path and credential-like values from
-event details. It changes presentation only and never substitutes fake model results.
+Demo mode is off by default. Enable it in settings to redact the workspace path and
+credential-like values from event details. It changes presentation only and never substitutes
+fake model results.
 
 ### Command-line interface
 

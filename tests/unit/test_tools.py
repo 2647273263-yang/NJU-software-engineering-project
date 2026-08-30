@@ -288,6 +288,19 @@ async def test_run_command_rejects_tty_programs_and_allows_output_callback(
     assert not refused.ok
     assert refused.error_code == "interactive_command"
     assert refused.metadata["interactive"] is True
+    assert "终端" in refused.summary
+
+    script = tmp_path / "hello.py"
+    script.write_text("print('ran-script')\n", encoding="utf-8")
+    ran = await commands.run_command(RunCommandArgs(command=f'{python} hello.py'))
+    assert ran.ok, ran.summary
+    assert "ran-script" in ran.content
+
+    chinese = tmp_path / "脚本.py"
+    chinese.write_text("print('ok-zh')\n", encoding="utf-8")
+    ran_zh = await commands.run_command(RunCommandArgs(command=f'{python} 脚本.py'))
+    assert ran_zh.ok, ran_zh.summary
+    assert "ok-zh" in ran_zh.content
 
     completed = await commands.run_command(
         RunCommandArgs(

@@ -66,6 +66,22 @@ def test_policy_flags_install_and_network_commands_as_medium() -> None:
     assert "network commands" in network.reason
 
 
+def test_policy_allows_tests_and_verify_without_approval() -> None:
+    policy = PolicyEngine()
+    pytest_cmd = policy.evaluate("run_command", {"command": "python -m pytest -q"})
+    npm_test = policy.evaluate("run_command", {"command": "npm test"})
+    verify = policy.evaluate("verify_changes", {"command": "python -m pytest -q"})
+    verify_default = policy.evaluate("verify_changes", {})
+
+    assert pytest_cmd.risk is RiskLevel.LOW
+    assert not pytest_cmd.requires_approval
+    assert npm_test.risk is RiskLevel.LOW
+    assert verify.risk is RiskLevel.LOW
+    assert not verify.requires_approval
+    assert verify_default.risk is RiskLevel.LOW
+    assert not verify_default.requires_approval
+
+
 def test_policy_flags_direct_git_metadata_write() -> None:
     decision = PolicyEngine(auto_approve=True).evaluate(
         "write_file", {"path": ".git/config"}

@@ -225,6 +225,64 @@ def test_gui_session_json_export_and_import(tmp_path: Path) -> None:
         assert detail["claims"][0]["statement"] == "登录可以跑"
 
 
+def test_session_export_includes_undo_snapshots(tmp_path: Path) -> None:
+    from forge_agent.gui.session_bundle import export_session_bundle, import_session_bundle
+    from forge_agent.storage import SQLiteStorage
+
+    database = tmp_path / "sessions.sqlite3"
+    source = tmp_path / "app.py"
+    source.write_text("old\n", encoding="utf-8")
+    with SQLiteStorage(database) as storage:
+        storage.create_session("sess-snap", {"task": "改文件", "workspace": str(tmp_path)})
+        tx = storage.create_edit_transaction("sess-snap", metadata={"tool": "write_file", "path": "app.py"})
+        backup = tmp_path / "before.bak"
+        backup.write_text("old\n", encoding="utf-8")
+        storage.save_snapshot(
+            tx.id,
+            "app.py",
+            {"existed": True, "before_sha256": "abc", "backup_path": str(backup)},
+        )
+        storage.complete_edit_transaction(
+            tx.id,
+            status="completed",
+            metadata={"tool": "write_file", "path": "app.py", "result_ok": True, "after_sha256": "def"},
+        )
+    bundle = export_session_bundle(database, "sess-snap")
+    assert bundle["version"] == 2
+    assert bundle["edit_transactions"]
+    assert bundle["edit_transactions"][0]["snapshots"][0]["backup_b64"]
+    imported = import_session_bundle(database, bundle)
+    with SQLiteStorage(database) as storage:
+        txs = storage.list_edit_transactions(imported)
+        assert len(txs) == 1
+        snaps = storage.list_snapshots(txs[0].id)
+        assert snaps[0].path == "app.py"
+        backup_path = Path(str(snaps[0].metadata["backup_path"]))
+        assert backup_path.is_file()
+        assert backup_path.read_text(encoding="utf-8") == "old\n"
+
+
+def test_workspace_reads_gbk_and_images(tmp_path: Path) -> None:
+    from forge_agent.gui.workspace_ops import read_workspace_file, save_uploaded_image
+
+    gbk_file = tmp_path / "note.txt"
+    gbk_file.write_bytes("中文报错".encode("gbk"))
+    text = read_workspace_file(tmp_path, "note.txt")
+    assert text["binary"] is False
+    assert "中文" in text["content"]
+
+    png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+        b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    uploaded = save_uploaded_image(tmp_path, "err.png", __import__("base64").b64encode(png).decode("ascii"), "image/png")
+    assert uploaded["ok"] is True
+    preview = read_workspace_file(tmp_path, uploaded["path"])
+    assert preview["image"] is True
+    assert preview["content"].startswith("data:image/png;base64,")
+
+
 def test_accepted_diffs_persist_on_session(tmp_path: Path) -> None:
     from forge_agent.storage import SQLiteStorage
 

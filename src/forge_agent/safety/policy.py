@@ -45,6 +45,14 @@ class PolicyEngine:
         r"(?i)\b(?:pip|pip3|uv|poetry|npm|pnpm|yarn|bun|cargo|go)\b.*\b(?:install|add|i)\b"
     )
     _NETWORK_COMMAND = re.compile(r"(?i)\b(?:curl|wget|invoke-webrequest)\b")
+    _TEST_COMMAND = re.compile(
+        r"(?i)(?:^|[;&|]\s*)(?:python(?:3)?|py)\s+(?:-[XB]\s+)*-m\s+"
+        r"(?:pytest|unittest)\b"
+        r"|(?:^|[;&|]\s*)(?:pytest|py\.test)\b"
+        r"|(?:^|[;&|]\s*)(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+test)\b"
+        r"|(?:^|[;&|]\s*)(?:cargo|go)\s+test\b"
+        r"|(?:^|[;&|]\s*)(?:ruff|mypy|eslint|tsc)\b"
+    )
     _DANGEROUS_COMMAND = re.compile(
         r"(?i)(?:^|[;&|]\s*)(?:rm|rmdir|del|format|shutdown|reboot)\b"
         r"|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\b)"
@@ -94,16 +102,28 @@ class PolicyEngine:
             path = str(arguments.get("path", ""))
             if path == ".git" or path.startswith((".git/", ".git\\")):
                 return RiskLevel.HIGH, "direct Git metadata modification"
-            return RiskLevel.MEDIUM, "workspace content modification"
-        if tool_name in {"run_command", "verify_changes"}:
-            command = str(arguments.get("command", ""))
-            if self._DANGEROUS_COMMAND.search(command):
-                return RiskLevel.HIGH, "command matches a destructive pattern"
-            if self._INSTALL_COMMAND.search(command):
-                return RiskLevel.MEDIUM, "installing dependencies can change the workspace"
-            if self._NETWORK_COMMAND.search(command):
-                return RiskLevel.MEDIUM, "network commands can cause side effects"
             if tool_name == "verify_changes":
-                return RiskLevel.MEDIUM, "verification commands can cause side effects"
-            return RiskLevel.MEDIUM, "commands can cause side effects"
+                return self._classify_command(
+                    str(arguments.get("command", "")),
+                    verification=True,
+                )
+            return RiskLevel.MEDIUM, "workspace content modification"
+        if tool_name == "run_command":
+            return self._classify_command(str(arguments.get("command", "")))
         return RiskLevel.HIGH, "unknown tool is treated conservatively"
+
+    def _classify_command(
+        self,
+        command: str,
+        *,
+        verification: bool = False,
+    ) -> tuple[RiskLevel, str]:
+        if self._DANGEROUS_COMMAND.search(command):
+            return RiskLevel.HIGH, "command matches a destructive pattern"
+        if self._INSTALL_COMMAND.search(command):
+            return RiskLevel.MEDIUM, "installing dependencies can change the workspace"
+        if self._NETWORK_COMMAND.search(command):
+            return RiskLevel.MEDIUM, "network commands can cause side effects"
+        if verification or self._TEST_COMMAND.search(command):
+            return RiskLevel.LOW, "verification and tests do not require approval"
+        return RiskLevel.MEDIUM, "commands can cause side effects"

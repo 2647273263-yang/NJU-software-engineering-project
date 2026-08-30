@@ -53,7 +53,7 @@ from forge_agent.gui.workspace_ops import (
     pick_directory,
     read_workspace_file,
     rename_workspace_path,
-    save_uploaded_image,
+    save_uploaded_file,
     session_settings_from_metadata,
     undo_path,
     workspace_tree,
@@ -812,9 +812,9 @@ def create_app(
             raise _error(400, str(exc)) from exc
 
     @app.post("/api/workspace/upload")
-    def upload_image(body: UploadImageBody) -> dict[str, Any]:
+    def upload_file(body: UploadImageBody) -> dict[str, Any]:
         try:
-            return save_uploaded_image(
+            return save_uploaded_file(
                 Path(body.workspace),
                 body.filename,
                 body.data_base64,

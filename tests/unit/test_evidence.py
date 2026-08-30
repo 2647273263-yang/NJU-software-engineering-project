@@ -55,3 +55,20 @@ def test_workspace_summary_becomes_proven_when_git_is_available() -> None:
     claim = ledger.claims[-1]
     assert claim.status is ClaimStatus.PROVEN
     assert "untracked" in claim.evidence[0].description
+
+
+def test_workspace_summary_omitted_when_git_is_unavailable() -> None:
+    ledger = EvidenceLedger.from_run_result(
+        RunResult(
+            status=AgentStatus.COMPLETED,
+            summary="done",
+            steps=1,
+            model_calls=1,
+            workspace_summary={
+                "available": False,
+                "summary": "Git is not installed or not on PATH",
+            },
+        )
+    )
+
+    assert ledger.claims == []

@@ -152,12 +152,14 @@ class EvidenceLedger(BaseModel):
                 )
             )
         summary = result.workspace_summary
-        if summary:
-            available = bool(summary.get("available"))
+        leftover = int(summary.get("untracked", 0) or 0) + len(
+            summary.get("changed_entries") or []
+        )
+        if summary.get("available") and leftover > 0:
             claims.append(
                 Claim(
                     statement="Working tree snapshot after the run",
-                    status=ClaimStatus.PROVEN if available else ClaimStatus.UNVERIFIABLE,
+                    status=ClaimStatus.PROVEN,
                     evidence=[
                         Evidence(
                             kind="git_status",
@@ -166,8 +168,6 @@ class EvidenceLedger(BaseModel):
                                 f"{summary.get('untracked', 0)} untracked, "
                                 f"+{summary.get('insertions', 0)}/"
                                 f"-{summary.get('deletions', 0)}"
-                                if available
-                                else str(summary.get("summary", "git status unavailable"))
                             ),
                         )
                     ],

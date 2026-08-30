@@ -20,6 +20,7 @@ venv/
 *.jsonl
 logs/
 sessions/
+.forge-uploads/
 
 .idea/
 .vscode/

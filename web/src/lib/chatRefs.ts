@@ -4,6 +4,7 @@ export type ChatRef = {
   id: string;
   path: string;
   kind?: "file" | "image";
+  label?: string;
   preview?: string;
   startLine?: number;
   endLine?: number;
@@ -20,13 +21,14 @@ export function chatRefId(path: string, startLine?: number, endLine?: number): s
 
 export function makeChatRef(
   path: string,
-  extra: {
-    startLine?: number;
-    endLine?: number;
-    snippet?: string;
-    kind?: "file" | "image";
-    preview?: string;
-  } = {},
+    extra: {
+      startLine?: number;
+      endLine?: number;
+      snippet?: string;
+      kind?: "file" | "image";
+      label?: string;
+      preview?: string;
+    } = {},
 ): ChatRef {
   return {
     id: chatRefId(path, extra.startLine, extra.endLine),

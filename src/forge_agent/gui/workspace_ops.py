@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,7 +16,13 @@ from forge_agent.agent.tool_runtime import PersistentToolRuntime
 from forge_agent.safety import PolicyEngine, PolicyToolRuntime
 from forge_agent.storage import SQLiteStorage
 from forge_agent.tools import build_default_registry
-from forge_agent.tools.filesystem import decode_bytes, is_image_path, iter_visible_paths
+from forge_agent.tools.filesystem import (
+    _looks_binary,
+    decode_bytes,
+    is_image_path,
+    iter_visible_paths,
+)
+from forge_agent.tools.sensitive import sensitive_read_reason
 from forge_agent.tools.workspace import WorkspaceSandbox
 from forge_agent.types import RunMode
 
@@ -280,8 +286,141 @@ def create_workspace_dir(workspace: Path, relative: str) -> dict[str, Any]:
     return {"ok": True, "summary": f"已创建文件夹 {relative}", "error_code": None, "path": sandbox.relative(path)}
 
 
-_UPLOAD_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+_UPLOAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 _UPLOAD_MAX = 2_000_000
+_MIME_TO_SUFFIX = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+}
+
+
+_BINARY_SUFFIXES = {
+    ".pdf",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".gz",
+    ".tar",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".whl",
+    ".pyc",
+    ".class",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".odt",
+    ".mp3",
+    ".mp4",
+    ".wav",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".bin",
+    ".wasm",
+}
+
+
+def _decode_upload_bytes(data_base64: str) -> bytes | None:
+    raw = data_base64.strip()
+    if "," in raw and raw.lower().startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    try:
+        return base64.b64decode(raw, validate=False)
+    except (ValueError, TypeError):
+        return None
+
+
+def _looks_like_image(data: bytes, suffix: str, mime: str) -> bool:
+    if suffix in _IMAGE_MIME or mime.lower() in _MIME_TO_SUFFIX:
+        return True
+    if data.startswith(b"\x89PNG\r\n\x1a\n") or data.startswith(b"\xff\xd8"):
+        return True
+    if data.startswith(b"GIF8") or data.startswith(b"BM"):
+        return True
+    return data[8:12] == b"WEBP" if data.startswith(b"RIFF") and len(data) >= 12 else False
+
+
+def _prepare_upload_dir(sandbox: WorkspaceSandbox) -> None:
+    directory = sandbox.resolve(".forge-uploads", must_exist=False)
+    directory.mkdir(parents=True, exist_ok=True)
+    ignore = directory / ".gitignore"
+    if not ignore.is_file():
+        ignore.write_text("*\n", encoding="utf-8")
+
+
+def save_uploaded_file(
+    workspace: Path,
+    filename: str,
+    data_base64: str,
+    mime: str = "",
+) -> dict[str, Any]:
+    data = _decode_upload_bytes(data_base64)
+    if data is None:
+        return {"ok": False, "summary": "文件数据无法读取", "error_code": "invalid"}
+    if not data:
+        return {"ok": False, "summary": "文件是空的", "error_code": "empty"}
+    if len(data) > _UPLOAD_MAX:
+        return {
+            "ok": False,
+            "summary": "文件超过 2MB，请缩小或拆分后再试。",
+            "error_code": "too_large",
+        }
+
+    original = Path(filename.replace("\\", "/")).name.strip() or "file"
+    blocked = sensitive_read_reason(original) or sensitive_read_reason(f".forge-uploads/{original}")
+    if blocked:
+        return {
+            "ok": False,
+            "summary": f"这类文件不能放进对话（{blocked}）。",
+            "error_code": "sensitive",
+        }
+
+    suffix = Path(original).suffix.lower()
+    if _looks_like_image(data, suffix, mime):
+        if suffix not in _IMAGE_MIME:
+            suffix = _MIME_TO_SUFFIX.get(mime.lower(), ".png")
+        kind = "image"
+        default_stem = "clip"
+        summary_prefix = "已保存图片"
+    elif (
+        suffix in _BINARY_SUFFIXES
+        or data.startswith(b"%PDF")
+        or data.startswith(b"PK")
+        or data.startswith(b"MZ")
+        or _looks_binary(data)
+    ):
+        return {
+            "ok": False,
+            "summary": "无法当文本阅读（如 PDF、压缩包、程序）。请把文件复制进工作区后自行处理。",
+            "error_code": "binary",
+        }
+    else:
+        kind = "text"
+        default_stem = "file"
+        summary_prefix = "已保存文件"
+
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    digest = hashlib.sha256(data).hexdigest()[:8]
+    stem = _UPLOAD_NAME.sub("-", Path(original).stem).strip(" .")[:40] or default_stem
+    relative = f".forge-uploads/{stamp}-{stem}-{digest}{suffix}"
+    sandbox = WorkspaceSandbox(workspace)
+    _prepare_upload_dir(sandbox)
+    path = sandbox.resolve(relative, must_exist=False)
+    path.write_bytes(data)
+    return {
+        "ok": True,
+        "summary": f"{summary_prefix} {relative}",
+        "error_code": None,
+        "path": relative,
+        "kind": kind,
+    }
 
 
 def save_uploaded_image(
@@ -290,41 +429,7 @@ def save_uploaded_image(
     data_base64: str,
     mime: str = "",
 ) -> dict[str, Any]:
-    raw = data_base64.strip()
-    if "," in raw and raw.lower().startswith("data:"):
-        raw = raw.split(",", 1)[1]
-    try:
-        data = base64.b64decode(raw, validate=False)
-    except (ValueError, TypeError) as exc:
-        return {"ok": False, "summary": "截图数据无法读取", "error_code": "invalid"}
-    if not data:
-        return {"ok": False, "summary": "截图是空的", "error_code": "empty"}
-    if len(data) > _UPLOAD_MAX:
-        return {"ok": False, "summary": "截图超过 2MB，请缩小后再贴。", "error_code": "too_large"}
-    suffix = Path(filename).suffix.lower()
-    if suffix not in _IMAGE_MIME:
-        guessed = {
-            "image/png": ".png",
-            "image/jpeg": ".jpg",
-            "image/gif": ".gif",
-            "image/webp": ".webp",
-            "image/bmp": ".bmp",
-        }.get(mime.lower(), ".png")
-        suffix = guessed
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    digest = hashlib.sha256(data).hexdigest()[:8]
-    stem = _UPLOAD_NAME.sub("-", Path(filename).stem)[:40].strip("-") or "clip"
-    relative = f".forge-uploads/{stamp}-{stem}-{digest}{suffix}"
-    sandbox = WorkspaceSandbox(workspace)
-    path = sandbox.resolve(relative, must_exist=False)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    return {
-        "ok": True,
-        "summary": f"已保存截图 {relative}",
-        "error_code": None,
-        "path": relative,
-    }
+    return save_uploaded_file(workspace, filename, data_base64, mime)
 
 
 def image_data_urls(workspace: Path, relatives: list[str]) -> list[str]:

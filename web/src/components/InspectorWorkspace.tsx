@@ -25,7 +25,7 @@ export type InspectorHandle = {
 const PANEL_OPTIONS: { kind: PanelKind; label: string; icon: typeof FileCode }[] = [
   { kind: "files", label: "文件", icon: FileCode },
   { kind: "git", label: "版本", icon: GitBranch },
-  { kind: "evidence", label: "核对", icon: Check },
+  { kind: "evidence", label: "验收", icon: Check },
   { kind: "context", label: "上下文", icon: Layers },
   { kind: "terminal", label: "终端", icon: TerminalSquare },
 ];

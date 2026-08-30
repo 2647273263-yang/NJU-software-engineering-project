@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, ClipboardEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -9,6 +9,7 @@ import {
   FolderOpen,
   PanelLeftClose,
   PanelLeftOpen,
+  Paperclip,
   Pencil,
   Plus,
   Loader2,
@@ -257,6 +258,8 @@ export default function App() {
   const inspectorBox = useRef<HTMLDivElement>(null);
   const inspector = useRef<InspectorHandle>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
+  const dropDepth = useRef(0);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -268,6 +271,7 @@ export default function App() {
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteMode, setPaletteMode] = useState<"open" | "insert">("open");
   const [chatRefs, setChatRefs] = useState<ChatRef[]>([]);
+  const [dropActive, setDropActive] = useState(false);
   const [resolvedDiffs, setResolvedDiffs] = useState<Record<string, string>>({});
   const scroller = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<string | null>(null);
@@ -702,6 +706,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const blockNavigation = (event: globalThis.DragEvent) => {
+      if (Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("dragover", blockNavigation);
+    window.addEventListener("drop", blockNavigation);
+    return () => {
+      window.removeEventListener("dragover", blockNavigation);
+      window.removeEventListener("drop", blockNavigation);
+    };
+  }, []);
+
+  useEffect(() => {
     const onUnload = (event: BeforeUnloadEvent) => {
       if (!anyDirty) return;
       event.preventDefault();
@@ -828,30 +846,105 @@ export default function App() {
     );
   }
 
-  async function onComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const items = Array.from(event.clipboardData?.items ?? []);
-    const imageItem = items.find((item) => item.type.startsWith("image/"));
-    if (!imageItem || !settings.workspace) return;
-    const file = imageItem.getAsFile();
-    if (!file) return;
-    event.preventDefault();
-    const dataUrl = await new Promise<string>((resolve, reject) => {
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(new Error("无法读取截图"));
+      reader.onerror = () => reject(new Error("无法读取文件"));
       reader.readAsDataURL(file);
     });
-    try {
-      const result = await api.uploadImage(settings.workspace, file.name || "clip.png", dataUrl, file.type);
-      if (!result.ok || !result.path) {
-        setError(result.summary || "保存截图失败");
-        return;
-      }
-      addChatRef(makeChatRef(result.path, { kind: "image", preview: dataUrl }));
-      setError("");
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : "保存截图失败");
+  }
+
+  function isDirectoryDrop(event: DragEvent<HTMLElement>): boolean {
+    const items = event.dataTransfer?.items;
+    if (!items) return false;
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index] as DataTransferItem & {
+        webkitGetAsEntry?: () => { isDirectory: boolean } | null;
+      };
+      if (item.webkitGetAsEntry?.()?.isDirectory) return true;
     }
+    return false;
+  }
+
+  async function ingestFiles(files: File[]) {
+    if (!settings.workspace) {
+      setError("请先选择工作区");
+      return;
+    }
+    const nested = files.some((file) => /[\\/]/.test(file.webkitRelativePath || ""));
+    if (nested) {
+      setError("请拖单个文件，不要拖文件夹");
+      return;
+    }
+    if (files.length === 0) {
+      setError("请拖单个文件");
+      return;
+    }
+    const notes: string[] = [];
+    const selected = files.slice(0, 5);
+    if (files.length > 5) notes.push("一次最多附上 5 个文件，已忽略多余的。");
+    for (const file of selected) {
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        const result = await api.uploadFile(settings.workspace, file.name || "file", dataUrl, file.type);
+        if (!result.ok || !result.path) {
+          notes.push(result.summary || `${file.name} 无法附上`);
+          continue;
+        }
+        addChatRef(
+          makeChatRef(result.path, {
+            kind: result.kind === "image" ? "image" : "file",
+            preview: result.kind === "image" ? dataUrl : undefined,
+            label: file.name || undefined,
+          }),
+        );
+      } catch (exc) {
+        notes.push(exc instanceof Error ? exc.message : `${file.name} 无法附上`);
+      }
+    }
+    setError(notes.join(" "));
+  }
+
+  async function onComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const listed = Array.from(event.clipboardData?.files ?? []);
+    if (listed.length === 0) {
+      const imageItem = Array.from(event.clipboardData?.items ?? []).find((item) =>
+        item.type.startsWith("image/"),
+      );
+      const file = imageItem?.getAsFile();
+      if (file) listed.push(file);
+    }
+    if (listed.length === 0) return;
+    event.preventDefault();
+    await ingestFiles(listed);
+  }
+
+  function onComposerDragOver(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function onComposerDragEnter(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    dropDepth.current += 1;
+    setDropActive(true);
+  }
+
+  function onComposerDragLeave() {
+    dropDepth.current = Math.max(0, dropDepth.current - 1);
+    if (dropDepth.current === 0) setDropActive(false);
+  }
+
+  async function onComposerDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    dropDepth.current = 0;
+    setDropActive(false);
+    if (isDirectoryDrop(event)) {
+      setError("请拖单个文件，不要拖文件夹");
+      return;
+    }
+    await ingestFiles(Array.from(event.dataTransfer?.files ?? []));
   }
 
   async function changeWorkspace() {
@@ -1593,7 +1686,27 @@ export default function App() {
         ) : null}
 
         <form onSubmit={(event) => void submit(event)} className="px-4 pb-4">
-          <div className="mx-auto max-w-[720px] rounded-2xl border border-border bg-[#1a1a1a] p-2 shadow-[0_8px_30px_rgba(0,0,0,.25)]">
+          <input
+            ref={attachInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              if (files.length) void ingestFiles(files);
+            }}
+          />
+          <div
+            className={cn(
+              "mx-auto max-w-[720px] rounded-2xl border bg-[#1a1a1a] p-2 shadow-[0_8px_30px_rgba(0,0,0,.25)]",
+              dropActive ? "border-primary" : "border-border",
+            )}
+            onDragEnter={onComposerDragEnter}
+            onDragOver={onComposerDragOver}
+            onDragLeave={onComposerDragLeave}
+            onDrop={(event) => void onComposerDrop(event)}
+          >
             {chatRefs.length > 0 ? (
               <div className="flex flex-wrap gap-1 px-2 pt-1">
                 {chatRefs.map((ref) => (
@@ -1606,10 +1719,10 @@ export default function App() {
                         <img src={ref.preview} alt="" className="h-5 w-5 rounded object-cover" />
                       ) : null}
                       {ref.kind === "image"
-                        ? "截图"
+                        ? ref.label || "截图"
                         : ref.startLine
                           ? `${ref.path}:${ref.startLine}${ref.endLine && ref.endLine !== ref.startLine ? `-${ref.endLine}` : ""}`
-                          : ref.path}
+                          : ref.label || ref.path}
                     </span>
                     <button
                       type="button"
@@ -1630,8 +1743,8 @@ export default function App() {
               rows={1}
               placeholder={
                 selectedId
-                  ? "继续此会话… @ 插文件，Ctrl+V 可贴截图，Shift+Enter 换行"
-                  : "输入编程任务，@ 插文件，Ctrl+V 可贴截图，Enter 发送"
+                  ? "继续此会话… 可拖入文件，@ 插工作区文件，Ctrl+V 可贴图，Shift+Enter 换行"
+                  : "输入编程任务，可拖入文件，@ 插工作区文件，Ctrl+V 可贴图，Enter 发送"
               }
               className="max-h-40 min-h-[44px] w-full resize-none bg-transparent px-2 py-2 text-[14px] outline-none placeholder:text-muted-foreground"
             />
@@ -1650,7 +1763,7 @@ export default function App() {
                   type="button"
                   variant="ghost"
                   size="icon"
-                  title="插入文件到提问"
+                  title="插入工作区文件到提问"
                   onClick={() => {
                     setPaletteMode("insert");
                     setPaletteOpen(true);
@@ -1658,6 +1771,15 @@ export default function App() {
                   }}
                 >
                   <AtSign className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  title="附上工作区外的文件"
+                  onClick={() => attachInputRef.current?.click()}
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
                 </Button>
                 {openFile ? (
                   <Button
@@ -1869,7 +1991,7 @@ export default function App() {
                   </>
                 ) : (
                   <p className="p-3 text-[12px] text-muted-foreground">
-                    点击左侧文件即可编辑。Ctrl+P 搜索文件，Ctrl+S 保存，Ctrl+F 查找，Ctrl+H 替换。可在当前目录右键新建文件。选中代码后可向 Agent 提问。对话里可粘贴截图。
+                    点击左侧文件即可编辑。Ctrl+P 搜索文件，Ctrl+S 保存，Ctrl+F 查找，Ctrl+H 替换。可在当前目录右键新建文件。选中代码后可向 Agent 提问。对话可拖入外部文件或粘贴截图。
                   </p>
                 )}
               </div>

@@ -151,8 +151,14 @@ export const api = {
         body: JSON.stringify({ workspace, path }),
       }),
     ),
-  uploadImage: (workspace: string, filename: string, dataBase64: string, mime: string) =>
-    parse<{ ok: boolean; summary: string; error_code: string | null; path?: string }>(
+  uploadFile: (workspace: string, filename: string, dataBase64: string, mime: string) =>
+    parse<{
+      ok: boolean;
+      summary: string;
+      error_code: string | null;
+      path?: string;
+      kind?: "image" | "text";
+    }>(
       fetch("/api/workspace/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

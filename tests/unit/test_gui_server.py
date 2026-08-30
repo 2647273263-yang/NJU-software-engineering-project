@@ -276,11 +276,71 @@ def test_workspace_reads_gbk_and_images(tmp_path: Path) -> None:
         b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
         b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
     )
-    uploaded = save_uploaded_image(tmp_path, "err.png", __import__("base64").b64encode(png).decode("ascii"), "image/png")
+    uploaded = save_uploaded_image(
+        tmp_path,
+        "err.png",
+        __import__("base64").b64encode(png).decode("ascii"),
+        "image/png",
+    )
     assert uploaded["ok"] is True
+    assert uploaded["kind"] == "image"
     preview = read_workspace_file(tmp_path, uploaded["path"])
     assert preview["image"] is True
     assert preview["content"].startswith("data:image/png;base64,")
+
+
+def test_upload_accepts_text_and_rejects_secrets_and_binaries(tmp_path: Path) -> None:
+    import base64
+
+    from forge_agent.gui.workspace_ops import save_uploaded_file
+
+    def payload(data: bytes) -> str:
+        return base64.b64encode(data).decode("ascii")
+
+    text = save_uploaded_file(tmp_path, "报错日志.log", payload(b"timeout after 3s\n"))
+    assert text["ok"] is True
+    assert text["kind"] == "text"
+    saved = tmp_path / text["path"]
+    assert saved.read_text(encoding="utf-8") == "timeout after 3s\n"
+    assert (tmp_path / ".forge-uploads" / ".gitignore").read_text(encoding="utf-8") == "*\n"
+
+    secret = save_uploaded_file(tmp_path, ".env", payload(b"SECRET=1\n"))
+    assert secret["ok"] is False
+    assert secret["error_code"] == "sensitive"
+    assert not list((tmp_path / ".forge-uploads").glob("*env*"))
+
+    key = save_uploaded_file(tmp_path, "id_rsa", payload(b"-----BEGIN OPENSSH PRIVATE KEY-----\n"))
+    assert key["ok"] is False
+    assert key["error_code"] == "sensitive"
+
+    pdf = save_uploaded_file(tmp_path, "spec.pdf", payload(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"))
+    assert pdf["ok"] is False
+    assert pdf["error_code"] == "binary"
+
+    huge = save_uploaded_file(tmp_path, "notes.txt", payload(b"a" * 2_000_001))
+    assert huge["ok"] is False
+    assert huge["error_code"] == "too_large"
+
+
+def test_upload_endpoint_saves_text_file(tmp_path: Path) -> None:
+    import base64
+
+    app = create_app(database_path=tmp_path / "sessions.sqlite3")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/workspace/upload",
+            json={
+                "workspace": str(tmp_path),
+                "filename": "notes.txt",
+                "data_base64": base64.b64encode(b"hello agent\n").decode("ascii"),
+                "mime": "text/plain",
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["kind"] == "text"
+    assert (tmp_path / body["path"]).read_text(encoding="utf-8") == "hello agent\n"
 
 
 def test_accepted_diffs_persist_on_session(tmp_path: Path) -> None:

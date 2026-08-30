@@ -257,3 +257,53 @@ def test_accepted_diffs_persist_on_session(tmp_path: Path) -> None:
         assert after_settings["accepted_diffs"]["bubble_sort.py"] == fingerprint
         assert after_settings["session"]["task"] == "排序"
 
+
+def test_gui_can_rename_and_delete_workspace_paths(tmp_path: Path) -> None:
+    source = tmp_path / "old.py"
+    source.write_text("print(1)\n", encoding="utf-8")
+    nested = tmp_path / "pkg"
+    nested.mkdir()
+    (nested / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    app = create_app(database_path=tmp_path / "sessions.sqlite3")
+    with TestClient(app) as client:
+        renamed = client.post(
+            "/api/workspace/rename",
+            json={"workspace": str(tmp_path), "path": "old.py", "to": "new.py"},
+        ).json()
+        assert renamed["ok"] is True
+        assert (tmp_path / "new.py").is_file()
+        assert not source.exists()
+        deleted = client.post(
+            "/api/workspace/delete",
+            json={"workspace": str(tmp_path), "path": "pkg"},
+        ).json()
+        assert deleted["ok"] is True
+        assert not nested.exists()
+
+
+def test_gui_can_change_idle_session_workspace(tmp_path: Path) -> None:
+    from forge_agent.storage import SQLiteStorage
+
+    other = tmp_path / "other"
+    other.mkdir()
+    database = tmp_path / "sessions.sqlite3"
+    with SQLiteStorage(database) as storage:
+        storage.create_session(
+            "sess-ws",
+            {"task": "demo", "workspace": str(tmp_path), "mode": "build"},
+        )
+    app = create_app(database_path=database)
+    with TestClient(app) as client:
+        changed = client.patch(
+            "/api/sessions/sess-ws/settings",
+            json={"workspace": str(other)},
+        )
+        assert changed.status_code == 200
+        assert Path(changed.json()["settings"]["workspace"]).resolve() == other.resolve()
+        missing = tmp_path / "missing-dir"
+        failed = client.patch(
+            "/api/sessions/sess-ws/settings",
+            json={"workspace": str(missing)},
+        )
+        assert failed.status_code == 400
+

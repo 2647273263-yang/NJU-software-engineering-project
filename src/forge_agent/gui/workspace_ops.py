@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -155,6 +156,64 @@ async def write_workspace_file(
     return {"ok": True, "summary": f"已保存 {relative}", "error_code": None}
 
 
+def delete_workspace_path(workspace: Path, relative: str) -> dict[str, Any]:
+    sandbox = WorkspaceSandbox(workspace)
+    path = sandbox.resolve(relative, must_exist=True)
+    if path == sandbox.root:
+        return {
+            "ok": False,
+            "summary": "不能删除工作区根目录。",
+            "error_code": "workspace_root",
+        }
+    if sandbox.is_sensitive_content(path):
+        return {
+            "ok": False,
+            "summary": f"拒绝删除敏感路径 {relative}",
+            "error_code": "sensitive",
+        }
+    if path.is_dir():
+        shutil.rmtree(path)
+        return {"ok": True, "summary": f"已删除文件夹 {relative}", "error_code": None}
+    path.unlink()
+    return {"ok": True, "summary": f"已删除 {relative}", "error_code": None}
+
+
+def rename_workspace_path(
+    workspace: Path,
+    relative: str,
+    destination: str,
+) -> dict[str, Any]:
+    sandbox = WorkspaceSandbox(workspace)
+    source = sandbox.resolve(relative, must_exist=True)
+    target = sandbox.resolve(destination, must_exist=False)
+    if source == sandbox.root:
+        return {
+            "ok": False,
+            "summary": "不能重命名工作区根目录。",
+            "error_code": "workspace_root",
+        }
+    if sandbox.is_sensitive_content(source) or sandbox.is_sensitive_content(target):
+        return {
+            "ok": False,
+            "summary": "拒绝重命名敏感路径。",
+            "error_code": "sensitive",
+        }
+    if target.exists():
+        return {
+            "ok": False,
+            "summary": f"{destination} 已存在",
+            "error_code": "exists",
+        }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+    return {
+        "ok": True,
+        "summary": f"已将 {relative} 重命名为 {destination}",
+        "error_code": None,
+        "path": sandbox.relative(target),
+    }
+
+
 def create_workspace_file(
     workspace: Path,
     relative: str,
@@ -260,6 +319,12 @@ def session_settings_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def apply_session_settings(metadata: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     updated = dict(metadata)
+    raw_workspace = values.get("workspace")
+    if isinstance(raw_workspace, str) and raw_workspace.strip():
+        workspace = Path(raw_workspace).expanduser().resolve()
+        if not workspace.is_dir():
+            raise ValueError(f"workspace is not a directory: {workspace}")
+        updated["workspace"] = workspace.as_posix()
     if values.get("model"):
         updated["model"] = values["model"]
     if values.get("mode"):

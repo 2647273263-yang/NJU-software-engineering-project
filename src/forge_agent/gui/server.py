@@ -10,7 +10,7 @@ import sys
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,9 +46,11 @@ from forge_agent.gui.workspace_ops import (
     accepted_diffs_from_metadata,
     apply_session_settings,
     create_workspace_file,
+    delete_workspace_path,
     latest_diff_for_path,
     pick_directory,
     read_workspace_file,
+    rename_workspace_path,
     session_settings_from_metadata,
     undo_path,
     workspace_tree,
@@ -117,6 +119,7 @@ class SessionSettingsBody(BaseModel):
     auto_approve: bool | None = None
     demo: bool | None = None
     title: str = ""
+    workspace: str = ""
 
 
 class TerminalBody(BaseModel):
@@ -130,6 +133,17 @@ class SaveFileBody(BaseModel):
     content: str
     session_id: str = ""
     create: bool = False
+
+
+class WorkspacePathBody(BaseModel):
+    workspace: str
+    path: str = Field(min_length=1)
+
+
+class RenamePathBody(BaseModel):
+    workspace: str
+    path: str = Field(min_length=1)
+    to: str = Field(min_length=1)
 
 
 class UndoBody(BaseModel):
@@ -170,6 +184,7 @@ class GitRemoteBody(BaseModel):
 class ApprovalBody(BaseModel):
     approved: bool
     remember_for_session: bool = False
+    scope: Literal["once", "run", "session"] | None = None
 
 
 @dataclass
@@ -356,6 +371,7 @@ def persist_gui_settings(database_path: Path, session_id: str, values: dict[str,
         changed = {
             key: updated[key]
             for key in (
+                "workspace",
                 "model",
                 "mode",
                 "verify_command",
@@ -639,6 +655,7 @@ def create_app(
             approval_id,
             body.approved,
             remember_for_session=body.remember_for_session,
+            scope=body.scope,
         )
         if not resolved:
             raise _error(404, f"unknown approval: {approval_id}")
@@ -649,7 +666,14 @@ def create_app(
         values = body.model_dump(exclude_none=True)
         if "verify" not in values and body.verify is None:
             values.pop("verify", None)
-        persist_gui_settings(runtime.database_path, session_id, values)
+        if not str(values.get("workspace") or "").strip():
+            values.pop("workspace", None)
+        if values.get("workspace") and runtime.service.running(session_id):
+            raise _error(400, "运行中不能更换工作区，请先停止当前任务。")
+        try:
+            persist_gui_settings(runtime.database_path, session_id, values)
+        except ValueError as exc:
+            raise _error(400, str(exc)) from exc
         with SQLiteStorage(runtime.database_path) as storage:
             record = storage.get_session(session_id)
         if record is None:
@@ -739,6 +763,20 @@ def create_app(
                 database_path=runtime.database_path,
                 session_id=body.session_id,
             )
+        except (ValueError, OSError, FileNotFoundError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/delete")
+    def delete_path(body: WorkspacePathBody) -> dict[str, Any]:
+        try:
+            return delete_workspace_path(Path(body.workspace), body.path)
+        except (ValueError, OSError, FileNotFoundError) as exc:
+            raise _error(400, str(exc)) from exc
+
+    @app.post("/api/workspace/rename")
+    def rename_path(body: RenamePathBody) -> dict[str, Any]:
+        try:
+            return rename_workspace_path(Path(body.workspace), body.path, body.to)
         except (ValueError, OSError, FileNotFoundError) as exc:
             raise _error(400, str(exc)) from exc
 

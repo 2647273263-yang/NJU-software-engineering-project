@@ -225,6 +225,7 @@ class SessionService:
         *,
         history: list[Message] | None,
     ) -> RunResult:
+        self.approvals.clear_run(session_id)
         with SQLiteStorage(self.database_path) as storage:
 
             def on_event(kind: str, payload: dict[str, Any]) -> None:

@@ -107,6 +107,48 @@ select option {
   overflow-y: auto !important;
 }
 
+.code-highlight {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  tab-size: 4;
+}
+
+.code-input {
+  color: transparent;
+  caret-color: #ececec;
+  tab-size: 4;
+}
+
+.code-input::selection {
+  background: rgba(88, 166, 255, 0.28);
+  color: transparent;
+}
+
+.tok-kw {
+  color: #c792ea;
+}
+
+.tok-str {
+  color: #c3e88d;
+}
+
+.tok-cmt {
+  color: #546e7a;
+  font-style: italic;
+}
+
+.tok-num {
+  color: #f78c6c;
+}
+
+.tok-fn {
+  color: #82aaff;
+}
+
+.tok-type {
+  color: #ffcb6b;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

@@ -138,6 +138,10 @@ export const STATUS_LABEL: Record<string, string> = {
   idle: "空闲",
 };
 
+export const RETRY_STATUSES = new Set(["failed", "cancelled", "stopped"]);
+
+export const FILE_WRITE_TOOLS = new Set(["write_file", "replace_in_file", "delete_file"]);
+
 export const HIDDEN_CHAT_KINDS = new Set([
   "model_delta",
   "run_finished",

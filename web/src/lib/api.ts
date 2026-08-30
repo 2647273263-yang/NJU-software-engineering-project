@@ -60,7 +60,7 @@ export const api = {
         body: JSON.stringify({ workspace }),
       }),
     ),
-  approve: (id: string, body: { approved: boolean; remember_for_session: boolean }) =>
+  approve: (id: string, body: { approved: boolean; remember_for_session?: boolean; scope?: "once" | "run" | "session" }) =>
     parse<{ resolved: boolean }>(
       fetch(`/api/approvals/${id}`, {
         method: "POST",
@@ -122,6 +122,22 @@ export const api = {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace, path, content, create: true }),
+      }),
+    ),
+  deletePath: (workspace: string, path: string) =>
+    parse<{ ok: boolean; summary: string; error_code: string | null }>(
+      fetch("/api/workspace/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, path }),
+      }),
+    ),
+  renamePath: (workspace: string, path: string, to: string) =>
+    parse<{ ok: boolean; summary: string; error_code: string | null; path?: string }>(
+      fetch("/api/workspace/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, path, to }),
       }),
     ),
   deleteSession: (id: string) =>

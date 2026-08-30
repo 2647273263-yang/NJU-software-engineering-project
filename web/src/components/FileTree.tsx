@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import type { TreeNode } from "../lib/types";
@@ -13,27 +13,64 @@ export function flattenFiles(nodes: TreeNode[]): string[] {
   return paths;
 }
 
+function parentOf(path: string): string {
+  const parts = path.replaceAll("\\", "/").split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
+}
+
+function joinPath(parent: string, name: string): string {
+  const clean = name.replaceAll("\\", "/").replace(/^\/+/, "").trim();
+  return parent ? `${parent}/${clean}` : clean;
+}
+
 export function FileTree({
   nodes,
   active,
   changed,
   onOpen,
   onCreate,
+  onRename,
+  onDelete,
 }: {
   nodes: TreeNode[];
   active: string | null;
   changed: Set<string>;
   onOpen: (path: string) => void;
   onCreate: () => void;
+  onRename: (from: string, to: string) => void;
+  onDelete: (path: string, kind: "file" | "dir") => void;
 }) {
   const [query, setQuery] = useState("");
+  const [menu, setMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const files = useMemo(() => flattenFiles(nodes), [nodes]);
   const filtered = query.trim()
     ? files.filter((path) => path.toLowerCase().includes(query.trim().toLowerCase()))
     : null;
 
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [menu]);
+
+  function beginRename(node: TreeNode) {
+    setMenu(null);
+    setRenaming(node.path);
+  }
+
+  function commitRename(from: string, name: string) {
+    setRenaming(null);
+    const next = name.trim();
+    if (!next || next.includes("/") || next.includes("\\")) return;
+    const to = joinPath(parentOf(from), next);
+    if (to !== from) onRename(from, to);
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-1 border-b border-border px-1 py-1">
         <input
           value={query}
@@ -53,18 +90,28 @@ export function FileTree({
             <p className="px-2 text-[12px] text-muted-foreground">没有匹配的文件。</p>
           ) : (
             filtered.map((path) => (
-              <button
+              <TreeRow
                 key={path}
-                type="button"
-                className={cn(
-                  "block w-full truncate px-2 py-0.5 text-left hover:bg-white/5",
-                  active === path && "bg-primary/15 text-primary",
-                  changed.has(path) && "text-emerald-400",
-                )}
-                onClick={() => onOpen(path)}
-              >
-                {path}
-              </button>
+                label={path}
+                path={path}
+                kind="file"
+                active={active === path}
+                changed={changed.has(path)}
+                depth={0}
+                renaming={renaming === path}
+                onOpen={() => onOpen(path)}
+                onMenu={(event) =>
+                  setMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    node: { name: path.split("/").pop() ?? path, path, kind: "file", children: [] },
+                  })
+                }
+                onBeginRename={() => setRenaming(path)}
+                onCommitRename={(name) => commitRename(path, name)}
+                onCancelRename={() => setRenaming(null)}
+                onDelete={() => onDelete(path, "file")}
+              />
             ))
           )
         ) : (
@@ -74,12 +121,43 @@ export function FileTree({
               node={node}
               active={active}
               changed={changed}
+              renaming={renaming}
               onOpen={onOpen}
+              onMenu={(event, item) => setMenu({ x: event.clientX, y: event.clientY, node: item })}
+              onBeginRename={beginRename}
+              onCommitRename={commitRename}
+              onCancelRename={() => setRenaming(null)}
+              onDelete={onDelete}
               depth={0}
             />
           ))
         )}
       </div>
+      {menu ? (
+        <div
+          className="fixed z-50 min-w-[132px] rounded-md border border-border bg-[#1f1f1f] py-1 text-[12px] shadow-lg"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="block w-full px-3 py-1.5 text-left hover:bg-white/5"
+            onClick={() => beginRename(menu.node)}
+          >
+            重命名
+          </button>
+          <button
+            type="button"
+            className="block w-full px-3 py-1.5 text-left text-red-300 hover:bg-white/5"
+            onClick={() => {
+              setMenu(null);
+              onDelete(menu.node.path, menu.node.kind);
+            }}
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -88,28 +166,47 @@ function TreeItem({
   node,
   active,
   changed,
+  renaming,
   onOpen,
+  onMenu,
+  onBeginRename,
+  onCommitRename,
+  onCancelRename,
+  onDelete,
   depth,
 }: {
   node: TreeNode;
   active: string | null;
   changed: Set<string>;
+  renaming: string | null;
   onOpen: (path: string) => void;
+  onMenu: (event: MouseEvent, node: TreeNode) => void;
+  onBeginRename: (node: TreeNode) => void;
+  onCommitRename: (from: string, name: string) => void;
+  onCancelRename: () => void;
+  onDelete: (path: string, kind: "file" | "dir") => void;
   depth: number;
 }) {
   const [open, setOpen] = useState(depth < 1);
   if (node.kind === "dir") {
     return (
       <div>
-        <button
-          type="button"
-          className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-white/5"
-          style={{ paddingLeft: 8 + depth * 12 }}
-          onClick={() => setOpen((value) => !value)}
-        >
-          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          <span className="truncate">{node.name}</span>
-        </button>
+        <TreeRow
+          label={node.name}
+          path={node.path}
+          kind="dir"
+          active={false}
+          changed={false}
+          depth={depth}
+          folderOpen={open}
+          renaming={renaming === node.path}
+          onOpen={() => setOpen((value) => !value)}
+          onMenu={(event) => onMenu(event, node)}
+          onBeginRename={() => onBeginRename(node)}
+          onCommitRename={(name) => onCommitRename(node.path, name)}
+          onCancelRename={onCancelRename}
+          onDelete={() => onDelete(node.path, "dir")}
+        />
         {open
           ? node.children.map((child) => (
               <TreeItem
@@ -117,7 +214,13 @@ function TreeItem({
                 node={child}
                 active={active}
                 changed={changed}
+                renaming={renaming}
                 onOpen={onOpen}
+                onMenu={onMenu}
+                onBeginRename={onBeginRename}
+                onCommitRename={onCommitRename}
+                onCancelRename={onCancelRename}
+                onDelete={onDelete}
                 depth={depth + 1}
               />
             ))
@@ -126,17 +229,127 @@ function TreeItem({
     );
   }
   return (
-    <button
-      type="button"
+    <TreeRow
+      label={node.name}
+      path={node.path}
+      kind="file"
+      active={active === node.path}
+      changed={changed.has(node.path)}
+      depth={depth}
+      renaming={renaming === node.path}
+      onOpen={() => onOpen(node.path)}
+      onMenu={(event) => onMenu(event, node)}
+      onBeginRename={() => onBeginRename(node)}
+      onCommitRename={(name) => onCommitRename(node.path, name)}
+      onCancelRename={onCancelRename}
+      onDelete={() => onDelete(node.path, "file")}
+    />
+  );
+}
+
+function TreeRow({
+  label,
+  path,
+  kind,
+  active,
+  changed,
+  depth,
+  folderOpen,
+  renaming,
+  onOpen,
+  onMenu,
+  onBeginRename,
+  onCommitRename,
+  onCancelRename,
+  onDelete,
+}: {
+  label: string;
+  path: string;
+  kind: "file" | "dir";
+  active: boolean;
+  changed: boolean;
+  depth: number;
+  folderOpen?: boolean;
+  renaming: boolean;
+  onOpen: () => void;
+  onMenu: (event: MouseEvent) => void;
+  onBeginRename: () => void;
+  onCommitRename: (name: string) => void;
+  onCancelRename: () => void;
+  onDelete: () => void;
+}) {
+  const pad = (kind === "dir" ? 8 : 20) + depth * 12;
+  return (
+    <div
       className={cn(
-        "block w-full truncate rounded px-1 py-0.5 text-left hover:bg-white/5",
-        active === node.path && "bg-primary/15 text-primary",
-        changed.has(node.path) && !active && "text-emerald-400",
+        "group flex w-full items-center rounded px-1 py-0.5 hover:bg-white/5",
+        active && "bg-primary/15 text-primary",
+        changed && !active && "text-emerald-400",
       )}
-      style={{ paddingLeft: 20 + depth * 12 }}
-      onClick={() => onOpen(node.path)}
+      style={{ paddingLeft: pad }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onMenu(event);
+      }}
     >
-      {node.name}
-    </button>
+      {kind === "dir" ? (
+        <button type="button" className="mr-1 shrink-0" onClick={onOpen}>
+          {folderOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </button>
+      ) : null}
+      {renaming ? (
+        <input
+          autoFocus
+          defaultValue={label}
+          className="h-5 min-w-0 flex-1 rounded border border-border bg-[#1a1a1a] px-1 text-[12px] outline-none"
+          onClick={(event) => event.stopPropagation()}
+          onBlur={(event) => {
+            if (event.currentTarget.dataset.skip === "1") return;
+            onCommitRename(event.currentTarget.value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onCommitRename(event.currentTarget.value);
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.currentTarget.dataset.skip = "1";
+              onCancelRename();
+            }
+          }}
+        />
+      ) : (
+        <button type="button" className="min-w-0 flex-1 truncate text-left" onClick={onOpen} title={path}>
+          {label}
+        </button>
+      )}
+      {renaming ? null : (
+        <span className="hidden shrink-0 group-hover:flex">
+          <button
+            type="button"
+            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+            title="重命名"
+            onClick={(event) => {
+              event.stopPropagation();
+              onBeginRename();
+            }}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            className="rounded p-0.5 text-muted-foreground hover:text-red-300"
+            title="删除"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </span>
+      )}
+    </div>
   );
 }

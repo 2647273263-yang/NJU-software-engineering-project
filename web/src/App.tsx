@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeftRight,
+  AtSign,
   Check,
   ChevronDown,
   FolderOpen,
@@ -22,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./lib/api";
+import { formatChatPayload, makeChatRef, type ChatRef } from "./lib/chatRefs";
 import {
   collectChangedFiles,
   fileFingerprint,
@@ -30,11 +32,13 @@ import {
 import { dropBlock, hunkStats, parseChangeBlocks, type ChangeBlock } from "./lib/diffHunks";
 import {
   HIDDEN_CHAT_KINDS,
+  FILE_WRITE_TOOLS,
   defaultSettings,
   loadSettings,
   saveSettings,
   STATUS_LABEL,
   TERMINAL_STATUSES,
+  RETRY_STATUSES,
   type ClaimRow,
   type PendingApproval,
   type RunSettings,
@@ -44,7 +48,7 @@ import {
   type TreeNode,
 } from "./lib/types";
 import { Button } from "./components/ui/button";
-import { CodeEditor } from "./components/CodeEditor";
+import { CodeEditor, type EditorSelection } from "./components/CodeEditor";
 import { EvidencePanel } from "./components/EvidencePanel";
 import { FileTree, flattenFiles } from "./components/FileTree";
 import { GitPanel } from "./components/GitPanel";
@@ -260,6 +264,8 @@ export default function App() {
   const [now, setNow] = useState(() => Date.now());
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteMode, setPaletteMode] = useState<"open" | "insert">("open");
+  const [chatRefs, setChatRefs] = useState<ChatRef[]>([]);
   const [resolvedDiffs, setResolvedDiffs] = useState<Record<string, string>>({});
   const scroller = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<string | null>(null);
@@ -303,6 +309,13 @@ export default function App() {
     const q = paletteQuery.trim().toLowerCase();
     return q ? all.filter((path) => path.toLowerCase().includes(q)) : all.slice(0, 40);
   }, [tree, paletteQuery]);
+  const lastUserText = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      if (events[index]?.view.kind === "user_message") return events[index].view.detail;
+    }
+    return "";
+  }, [events]);
+  const canRetry = Boolean(selectedId && !running && lastUserText && RETRY_STATUSES.has(status));
 
   function persistResolved(sessionId: string | null, value: Record<string, string>) {
     if (!sessionId) return;
@@ -353,6 +366,7 @@ export default function App() {
     setRunning(Boolean(data.session.running) && !TERMINAL_STATUSES.has(data.session.status));
     setStreamText("");
     setTask("");
+    setChatRefs([]);
     setTabs([]);
     setActivePath(null);
     setResolvedDiffs({ ...readResolved(id), ...(data.accepted_diffs ?? {}) });
@@ -388,45 +402,50 @@ export default function App() {
     if (!settings.workspace) return;
     inspector.current?.open("files");
     const existing = tabsRef.current.find((item) => item.path === path);
-    if (existing) {
+    if (existing && !existing.missing) {
       setActivePath(path);
       return;
     }
-    const pending = changedRef.current.find((item) => item.path === path);
-    if (pending?.kind === "deleted") {
-      const hidden = isChangeAccepted(pending, resolvedRef.current);
+    try {
+      const data = await api.file(settings.workspace, path, selectedId ?? undefined);
+      const file = changedRef.current.find((item) => item.path === data.path || item.path === path);
+      const hidden = !file || isChangeAccepted(file, resolvedRef.current);
       const doc: OpenDoc = {
-        path,
-        content: "",
-        draft: "",
-        diff: hidden ? null : pending.diff,
-        hunks: hidden ? [] : parseChangeBlocks(pending.diff),
-        binary: false,
-        truncated: false,
+        path: data.path,
+        content: data.content,
+        draft: data.content,
+        diff: hidden ? null : (data.diff ?? file?.diff ?? null),
+        hunks: hidden ? [] : parseChangeBlocks(data.diff ?? file?.diff ?? null),
+        binary: data.binary,
+        truncated: data.truncated,
         stale: false,
         incoming: null,
-        missing: true,
+        missing: false,
       };
       setTabs((current) => [...current.filter((item) => item.path !== path), doc]);
       setActivePath(path);
-      return;
+    } catch {
+      const pending = changedRef.current.find((item) => item.path === path);
+      const hidden = !pending || isChangeAccepted(pending, resolvedRef.current);
+      if (pending?.kind === "deleted" && !hidden) {
+        const doc: OpenDoc = {
+          path,
+          content: "",
+          draft: "",
+          diff: pending.diff,
+          hunks: parseChangeBlocks(pending.diff),
+          binary: false,
+          truncated: false,
+          stale: false,
+          incoming: null,
+          missing: true,
+        };
+        setTabs((current) => [...current.filter((item) => item.path !== path), doc]);
+        setActivePath(path);
+        return;
+      }
+      setError(`无法打开 ${path}`);
     }
-    const data = await api.file(settings.workspace, path, selectedId ?? undefined);
-    const file = changedRef.current.find((item) => item.path === data.path || item.path === path);
-    const hidden = !file || isChangeAccepted(file, resolvedRef.current);
-    const doc: OpenDoc = {
-      path: data.path,
-      content: data.content,
-      draft: data.content,
-      diff: hidden ? null : (data.diff ?? file?.diff ?? null),
-      hunks: hidden ? [] : parseChangeBlocks(data.diff ?? file?.diff ?? null),
-      binary: data.binary,
-      truncated: data.truncated,
-      stale: false,
-      incoming: null,
-    };
-    setTabs((current) => [...current.filter((item) => item.path !== path), doc]);
-    setActivePath(path);
   }
 
   async function closeTab(path: string) {
@@ -489,6 +508,7 @@ export default function App() {
               hunks: hidden ? [] : parseChangeBlocks(data.diff),
               stale: false,
               incoming: null,
+              missing: false,
             };
           }
           if (data.content !== item.content) {
@@ -500,6 +520,7 @@ export default function App() {
     } catch {
       const pending = changedRef.current.find((item) => item.path === path);
       if (pending?.kind !== "deleted") return;
+      if (isChangeAccepted(pending, resolvedRef.current)) return;
       setTabs((current) =>
         current.map((item) =>
           item.path === path
@@ -648,6 +669,7 @@ export default function App() {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") {
         event.preventDefault();
+        setPaletteMode("open");
         setPaletteOpen(true);
         setPaletteQuery("");
       }
@@ -682,9 +704,9 @@ export default function App() {
     };
   }
 
-  async function submit(event?: FormEvent) {
+  async function submit(event?: FormEvent, rawText?: string) {
     event?.preventDefault();
-    const text = task.trim();
+    const text = (rawText ?? formatChatPayload(task, chatRefs)).trim();
     if (!text || running) return;
     if (!settings.workspace) {
       setError("请先选择工作区文件夹。");
@@ -714,6 +736,7 @@ export default function App() {
         setRunning(true);
         setStatus("initializing");
         setTask("");
+        setChatRefs([]);
         await api.resume(selectedId, runPayload(text));
       } else {
         setEvents([userEvent]);
@@ -722,6 +745,7 @@ export default function App() {
         setRunning(true);
         setStatus("initializing");
         setTask("");
+        setChatRefs([]);
         const result = await api.start(runPayload(text));
         setSelectedId(result.session_id);
       }
@@ -734,9 +758,79 @@ export default function App() {
   }
 
   function onComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "@") {
+      const start = event.currentTarget.selectionStart ?? 0;
+      const before = start > 0 ? event.currentTarget.value[start - 1] : "";
+      if (start === 0 || before === " " || before === "\n") {
+        event.preventDefault();
+        setPaletteMode("insert");
+        setPaletteOpen(true);
+        setPaletteQuery("");
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
+    }
+  }
+
+  function addChatRef(ref: ChatRef) {
+    setChatRefs((current) => [...current.filter((item) => item.id !== ref.id), ref]);
+  }
+
+  function insertFileRef(path: string) {
+    addChatRef(makeChatRef(path));
+  }
+
+  function askSelection(selection: EditorSelection) {
+    if (!openFile) return;
+    addChatRef(
+      makeChatRef(openFile.path, {
+        startLine: selection.startLine,
+        endLine: selection.endLine,
+        snippet: selection.text,
+      }),
+    );
+  }
+
+  async function retryLast() {
+    if (!canRetry) return;
+    await submit(
+      undefined,
+      "请继续完成上一条用户任务。若已部分完成，从中断处接着做，不要重复已经完成的步骤。",
+    );
+  }
+
+  async function changeWorkspace() {
+    if (running) {
+      setError("运行中不能更换工作区，请先停止当前任务。");
+      return;
+    }
+    try {
+      const picked = await api.pickWorkspace();
+      if (!picked.path) return;
+      if (picked.path.replaceAll("\\", "/") === settings.workspace.replaceAll("\\", "/")) return;
+      if (selectedId) {
+        if (
+          !window.confirm(
+            "更换工作区后，本会话将针对新文件夹继续。此前针对旧文件夹的撤销快照可能不再适用。确定吗？",
+          )
+        ) {
+          return;
+        }
+        await api.saveSettings(selectedId, { workspace: picked.path });
+      }
+      setTabs([]);
+      setActivePath(null);
+      setError("");
+      const next = defaultSettings({ ...settings, workspace: picked.path });
+      setSettings(next);
+      saveSettings(next);
+      await refreshTree(picked.path);
+      await refreshSessions();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "无法更换工作区");
     }
   }
 
@@ -751,6 +845,7 @@ export default function App() {
       setApproval(null);
       setStreamText("");
       setTask("");
+      setChatRefs([]);
       setStatus("idle");
       setError("");
       setTabs([]);
@@ -869,24 +964,29 @@ export default function App() {
 
   async function reloadTab(path: string) {
     if (!settings.workspace) return;
-    const data = await api.file(settings.workspace, path, selectedId ?? undefined);
-    setTabs((current) =>
-      current.map((item) =>
-        item.path === path
-          ? {
-              ...item,
-              content: data.content,
-              draft: data.content,
-              binary: data.binary,
-              truncated: data.truncated,
-              diff: null,
-              hunks: [],
-              stale: false,
-              incoming: null,
-            }
-          : item,
-      ),
-    );
+    try {
+      const data = await api.file(settings.workspace, path, selectedId ?? undefined);
+      setTabs((current) =>
+        current.map((item) =>
+          item.path === path
+            ? {
+                ...item,
+                content: data.content,
+                draft: data.content,
+                binary: data.binary,
+                truncated: data.truncated,
+                diff: null,
+                hunks: [],
+                stale: false,
+                incoming: null,
+                missing: false,
+              }
+            : item,
+        ),
+      );
+    } catch {
+      setError(`无法重新加载 ${path}`);
+    }
   }
 
   async function undoFile(path: string) {
@@ -978,6 +1078,50 @@ export default function App() {
       await refreshTree();
       await openWorkspaceFile(path);
     }
+  }
+
+  function rewriteOpenPaths(from: string, to: string) {
+    setTabs((current) =>
+      current.map((item) => {
+        if (item.path === from) return { ...item, path: to };
+        if (item.path.startsWith(`${from}/`)) {
+          return { ...item, path: `${to}${item.path.slice(from.length)}` };
+        }
+        return item;
+      }),
+    );
+    setActivePath((current) => {
+      if (!current) return current;
+      if (current === from) return to;
+      if (current.startsWith(`${from}/`)) return `${to}${current.slice(from.length)}`;
+      return current;
+    });
+  }
+
+  async function renameWorkspaceItem(from: string, to: string) {
+    if (!settings.workspace || from === to) return;
+    const result = await api.renamePath(settings.workspace, from, to);
+    setError(result.ok ? "" : result.summary);
+    if (!result.ok) return;
+    rewriteOpenPaths(from, result.path || to);
+    await refreshTree();
+  }
+
+  async function deleteWorkspaceItem(path: string, kind: "file" | "dir") {
+    if (!settings.workspace) return;
+    const label = kind === "dir" ? `删除文件夹 ${path} 及其内容？` : `删除文件 ${path}？`;
+    if (!window.confirm(label)) return;
+    const result = await api.deletePath(settings.workspace, path);
+    setError(result.ok ? "" : result.summary);
+    if (!result.ok) return;
+    const remaining = tabsRef.current.filter(
+      (item) => item.path !== path && !item.path.startsWith(`${path}/`),
+    );
+    setTabs(remaining);
+    if (activePath === path || activePath?.startsWith(`${path}/`)) {
+      setActivePath(remaining[remaining.length - 1]?.path ?? null);
+    }
+    await refreshTree();
   }
 
   async function removeSession(id: string) {
@@ -1158,7 +1302,20 @@ export default function App() {
                 <PanelLeftOpen className="h-4 w-4" />
               </Button>
             ) : null}
-            <div className="truncate text-[12px] text-muted-foreground">{shortPath(settings.workspace)}</div>
+            <div className="flex min-w-0 items-center gap-1">
+              <div className="truncate text-[12px] text-muted-foreground">{shortPath(settings.workspace)}</div>
+              {settings.workspace && !running ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  title="更换工作区"
+                  onClick={() => void changeWorkspace()}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                </Button>
+              ) : null}
+            </div>
           </div>
           <div className="flex items-center gap-1">
             <Button
@@ -1175,7 +1332,7 @@ export default function App() {
                 "rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground",
                 running && "border-transparent bg-primary/15 text-primary",
                 status === "completed" && "text-emerald-400",
-                (status === "failed" || status === "cancelled") && "text-red-400",
+                (status === "failed" || status === "cancelled" || status === "stopped") && "text-red-400",
               )}
             >
               {STATUS_LABEL[status] ?? status}
@@ -1305,38 +1462,69 @@ export default function App() {
             <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-400" />
             <div className="min-w-0 flex-1">
               <div className="text-[13px]">
-                {approval.kind === "plan" ? "是否按此方案执行？" : `需要审批：${approval.tool}`}
+                {approval.kind === "plan"
+                  ? "是否按此方案执行？"
+                  : FILE_WRITE_TOOLS.has(approval.tool)
+                    ? "允许本次任务写入工作区文件？"
+                    : `需要审批：${approval.tool}`}
               </div>
               <div className="text-[12px] text-muted-foreground">
                 {approval.kind === "plan"
                   ? "方案已在上方对话中。点「执行」才改代码，点「先不改」则停在方案。"
-                  : approval.reason}
+                  : FILE_WRITE_TOOLS.has(approval.tool)
+                    ? "允许后，本轮任务里再写文件、改文件或删文件都不再询问。运行命令仍会逐次确认。"
+                    : approval.reason}
               </div>
               {approval.kind === "plan" ? null : Object.keys(approval.arguments).length > 0 ? (
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-[11px] text-muted-foreground">
                   {JSON.stringify(approval.arguments, null, 2)}
                 </pre>
               ) : null}
-              <div className="mt-2 flex gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => void api.approve(approval.id, { approved: true, remember_for_session: false })}
-                >
-                  {approval.kind === "plan" ? "执行" : "允许"}
-                </Button>
-                {approval.kind === "plan" ? null : (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {approval.kind === "plan" ? (
                   <Button
                     size="sm"
-                    variant="secondary"
-                    onClick={() => void api.approve(approval.id, { approved: true, remember_for_session: true })}
+                    onClick={() => void api.approve(approval.id, { approved: true, scope: "once" })}
                   >
-                    本会话记住
+                    执行
                   </Button>
+                ) : FILE_WRITE_TOOLS.has(approval.tool) ? (
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={() => void api.approve(approval.id, { approved: true, scope: "run" })}
+                    >
+                      允许本次任务写文件
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void api.approve(approval.id, { approved: true, scope: "once" })}
+                    >
+                      只允许这一次
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={() => void api.approve(approval.id, { approved: true, scope: "once" })}
+                    >
+                      允许
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void api.approve(approval.id, { approved: true, scope: "session" })}
+                    >
+                      本会话记住此类命令
+                    </Button>
+                  </>
                 )}
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => void api.approve(approval.id, { approved: false, remember_for_session: false })}
+                  onClick={() => void api.approve(approval.id, { approved: false, scope: "once" })}
                 >
                   {approval.kind === "plan" ? "先不改" : "拒绝"}
                 </Button>
@@ -1349,12 +1537,35 @@ export default function App() {
 
         <form onSubmit={(event) => void submit(event)} className="px-4 pb-4">
           <div className="mx-auto max-w-[720px] rounded-2xl border border-border bg-[#1a1a1a] p-2 shadow-[0_8px_30px_rgba(0,0,0,.25)]">
+            {chatRefs.length > 0 ? (
+              <div className="flex flex-wrap gap-1 px-2 pt-1">
+                {chatRefs.map((ref) => (
+                  <span
+                    key={ref.id}
+                    className="flex max-w-full items-center gap-1 rounded-full border border-border bg-white/5 px-2 py-0.5 text-[11px]"
+                  >
+                    <span className="truncate">
+                      {ref.startLine
+                        ? `${ref.path}:${ref.startLine}${ref.endLine && ref.endLine !== ref.startLine ? `-${ref.endLine}` : ""}`
+                        : ref.path}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => setChatRefs((current) => current.filter((item) => item.id !== ref.id))}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <textarea
               value={task}
               onChange={(event) => setTask(event.target.value)}
               onKeyDown={onComposerKey}
               rows={1}
-              placeholder={selectedId ? "继续此会话，或描述下一步… Shift+Enter 换行" : "输入编程任务，Enter 发送，Shift+Enter 换行"}
+              placeholder={selectedId ? "继续此会话，或描述下一步… @ 插入文件，Shift+Enter 换行" : "输入编程任务，@ 插入文件，Enter 发送"}
               className="max-h-40 min-h-[44px] w-full resize-none bg-transparent px-2 py-2 text-[14px] outline-none placeholder:text-muted-foreground"
             />
             <div className="flex items-center justify-between px-1 pb-0.5">
@@ -1368,6 +1579,30 @@ export default function App() {
                     if (selectedId) void api.saveSettings(selectedId, { mode });
                   }}
                 />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  title="插入文件到提问"
+                  onClick={() => {
+                    setPaletteMode("insert");
+                    setPaletteOpen(true);
+                    setPaletteQuery("");
+                  }}
+                >
+                  <AtSign className="h-3.5 w-3.5" />
+                </Button>
+                {openFile ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    title="把当前打开的文件插入提问"
+                    onClick={() => insertFileRef(openFile.path)}
+                  >
+                    当前文件
+                  </Button>
+                ) : null}
                 {selectedId && !running ? (
                   <Button
                     type="button"
@@ -1396,10 +1631,17 @@ export default function App() {
                   停止
                 </Button>
               ) : (
-                <Button type="submit" size="sm" disabled={!task.trim()}>
-                  <SendHorizontal className="h-3.5 w-3.5" />
-                  发送
-                </Button>
+                <div className="flex items-center gap-1">
+                  {canRetry ? (
+                    <Button type="button" variant="secondary" size="sm" onClick={() => void retryLast()}>
+                      接着试
+                    </Button>
+                  ) : null}
+                  <Button type="submit" size="sm" disabled={!task.trim() && chatRefs.length === 0}>
+                    <SendHorizontal className="h-3.5 w-3.5" />
+                    发送
+                  </Button>
+                </div>
               )}
             </div>
           </div>
@@ -1428,6 +1670,8 @@ export default function App() {
                   changed={changedPaths}
                   onOpen={(path) => void openWorkspaceFile(path)}
                   onCreate={() => void createWorkspaceFile()}
+                  onRename={(from, to) => void renameWorkspaceItem(from, to)}
+                  onDelete={(path, kind) => void deleteWorkspaceItem(path, kind)}
                 />
               </div>
               <SplitHandle onMove={moveTree} />
@@ -1538,18 +1782,20 @@ export default function App() {
                       </p>
                     ) : (
                       <CodeEditor
+                        path={openFile.path}
                         value={draft}
                         onChange={setDraft}
                         hunks={openFile.hunks}
                         onSave={() => void saveOpenFile(true)}
                         onHunkDo={(id) => doHunk(openFile.path, id)}
                         onHunkUndo={(id, next) => void undoHunk(openFile.path, id, next)}
+                        onAskSelection={askSelection}
                       />
                     )}
                   </>
                 ) : (
                   <p className="p-3 text-[12px] text-muted-foreground">
-                    点击左侧文件即可编辑。Ctrl+P 搜索文件，Ctrl+S 保存你的手改，Ctrl+F 在文件里查找。
+                    点击左侧文件即可编辑。Ctrl+P 搜索文件，Ctrl+S 保存你的手改，Ctrl+F 在文件里查找。选中代码后可向 Agent 提问。
                   </p>
                 )}
               </div>
@@ -1640,12 +1886,13 @@ export default function App() {
               autoFocus
               value={paletteQuery}
               onChange={(event) => setPaletteQuery(event.target.value)}
-              placeholder="搜索工作区文件"
+              placeholder={paletteMode === "insert" ? "选择文件插入提问" : "搜索工作区文件"}
               className="h-9 w-full rounded-md border border-border bg-transparent px-3 text-[13px] outline-none"
               onKeyDown={(event) => {
                 if (event.key === "Escape") setPaletteOpen(false);
                 if (event.key === "Enter" && paletteFiles[0]) {
-                  void openWorkspaceFile(paletteFiles[0]);
+                  if (paletteMode === "insert") insertFileRef(paletteFiles[0]);
+                  else void openWorkspaceFile(paletteFiles[0]);
                   setPaletteOpen(false);
                 }
               }}
@@ -1657,7 +1904,8 @@ export default function App() {
                   type="button"
                   className="block w-full truncate rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-white/5"
                   onClick={() => {
-                    void openWorkspaceFile(path);
+                    if (paletteMode === "insert") insertFileRef(path);
+                    else void openWorkspaceFile(path);
                     setPaletteOpen(false);
                   }}
                 >
@@ -1681,24 +1929,18 @@ export default function App() {
               <div className="mt-1 flex gap-2">
                 <input
                   value={settings.workspace}
-                  readOnly={Boolean(selectedId)}
-                  onChange={(event) => setSettings({ ...settings, workspace: event.target.value })}
+                  readOnly
                   className="h-8 min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 text-[13px]"
                 />
-                {!selectedId ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      void api.pickWorkspace().then((result) => {
-                        if (result.path) setSettings({ ...settings, workspace: result.path });
-                      })
-                    }
-                  >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    选择
-                  </Button>
-                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={running}
+                  onClick={() => void changeWorkspace()}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  {selectedId ? "更换" : "选择"}
+                </Button>
               </div>
             </label>
             <label className="mb-2 block text-[12px] text-muted-foreground">

@@ -1,6 +1,13 @@
 import { ClipboardEvent, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { applyHunkUndo, type ChangeBlock } from "../lib/diffHunks";
+import { highlightCode, highlightLine } from "../lib/syntax";
 import { cn } from "../lib/utils";
+
+export type EditorSelection = {
+  startLine: number;
+  endLine: number;
+  text: string;
+};
 
 type ViewRow =
   | { type: "code"; line: number; text: string; mark: "none" | "add" }
@@ -37,6 +44,19 @@ function buildRows(value: string, hunks: ChangeBlock[]): ViewRow[] {
     index += 1;
   }
   return rows;
+}
+
+function selectionOf(value: string, start: number, end: number): EditorSelection | null {
+  if (start === end) return null;
+  const from = Math.min(start, end);
+  const to = Math.max(start, end);
+  const text = value.slice(from, to);
+  if (!text.trim()) return null;
+  return {
+    startLine: value.slice(0, from).split("\n").length,
+    endLine: value.slice(0, to).split("\n").length,
+    text,
+  };
 }
 
 function FindBar({
@@ -84,28 +104,35 @@ function FindBar({
 }
 
 export function CodeEditor({
+  path,
   value,
   onChange,
   hunks,
   onSave,
   onHunkDo,
   onHunkUndo,
+  onAskSelection,
 }: {
+  path: string;
   value: string;
   onChange: (next: string) => void;
   hunks: ChangeBlock[];
   onSave: () => void;
   onHunkDo: (id: string) => void;
   onHunkUndo: (id: string, next: string) => void;
+  onAskSelection: (selection: EditorSelection) => void;
 }) {
   const lines = useMemo(() => value.split("\n"), [value]);
   const rows = useMemo(() => buildRows(value, hunks), [value, hunks]);
+  const highlighted = useMemo(() => highlightCode(value, path), [value, path]);
   const editor = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLDivElement>(null);
+  const highlight = useRef<HTMLPreElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [findOpen, setFindOpen] = useState(false);
   const [matchIndex, setMatchIndex] = useState(0);
+  const [selection, setSelection] = useState<EditorSelection | null>(null);
   const gutterWidth = `${Math.max(2, String(lines.length).length) + 1}ch`;
   const decorated = hunks.length > 0;
 
@@ -141,6 +168,14 @@ export function CodeEditor({
     if (gutter.current && editor.current) {
       gutter.current.scrollTop = editor.current.scrollTop;
     }
+    if (highlight.current && editor.current) {
+      highlight.current.scrollTop = editor.current.scrollTop;
+      highlight.current.scrollLeft = editor.current.scrollLeft;
+    }
+  }
+
+  function captureSelection(start: number, end: number) {
+    setSelection(selectionOf(value, start, end));
   }
 
   function jumpTo(index: number) {
@@ -160,6 +195,7 @@ export function CodeEditor({
     node.focus();
     node.setSelectionRange(start, start + query.length);
     node.scrollTop = Math.max(0, (line - 4) * 20);
+    syncScroll();
   }
 
   function onPlainKey(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -219,6 +255,24 @@ export function CodeEditor({
     onChange(next.join("\n"));
   }
 
+  const ask =
+    selection && onAskSelection ? (
+      <div className="flex items-center gap-2 border-b border-border bg-primary/10 px-2 py-1 text-[12px]">
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+          已选 {selection.startLine === selection.endLine
+            ? `第 ${selection.startLine} 行`
+            : `第 ${selection.startLine}–${selection.endLine} 行`}
+        </span>
+        <button
+          type="button"
+          className="rounded px-1.5 py-0.5 text-primary hover:bg-white/5"
+          onClick={() => onAskSelection(selection)}
+        >
+          向 Agent 提问
+        </button>
+      </div>
+    ) : null;
+
   const find = findOpen ? (
     <FindBar
       query={query}
@@ -233,6 +287,7 @@ export function CodeEditor({
   if (!decorated) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
+        {ask}
         {find}
         <div className="flex min-h-0 flex-1 overflow-hidden font-mono text-[12px] leading-5">
           <div
@@ -244,16 +299,33 @@ export function CodeEditor({
               <div key={`n-${index}`}>{index + 1}</div>
             ))}
           </div>
-          <textarea
-            ref={editor}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onScroll={syncScroll}
-            onKeyDown={onPlainKey}
-            spellCheck={false}
-            wrap="soft"
-            className="min-h-0 min-w-0 flex-1 resize-none bg-transparent p-2 outline-none"
-          />
+          <div className="relative min-h-0 min-w-0 flex-1">
+            <pre
+              ref={highlight}
+              aria-hidden
+              className="code-highlight pointer-events-none absolute inset-0 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[12px] leading-5"
+              dangerouslySetInnerHTML={{ __html: highlighted || " " }}
+            />
+            <textarea
+              ref={editor}
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onScroll={syncScroll}
+              onKeyDown={onPlainKey}
+              onSelect={(event) =>
+                captureSelection(event.currentTarget.selectionStart, event.currentTarget.selectionEnd)
+              }
+              onKeyUp={(event) =>
+                captureSelection(event.currentTarget.selectionStart, event.currentTarget.selectionEnd)
+              }
+              onMouseUp={(event) =>
+                captureSelection(event.currentTarget.selectionStart, event.currentTarget.selectionEnd)
+              }
+              spellCheck={false}
+              wrap="soft"
+              className="code-input absolute inset-0 z-10 min-h-0 min-w-0 resize-none overflow-auto bg-transparent p-2 font-mono text-[12px] leading-5 outline-none"
+            />
+          </div>
         </div>
       </div>
     );
@@ -261,6 +333,7 @@ export function CodeEditor({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {ask}
       {find}
       <div ref={scroller} className="min-h-0 flex-1 overflow-auto font-mono text-[12px] leading-5">
         {rows.map((row, index) => {
@@ -303,7 +376,10 @@ export function CodeEditor({
                 >
                   −
                 </div>
-                <pre className="min-w-0 flex-1 whitespace-pre-wrap px-2 py-0 text-red-200/80">{row.text || " "}</pre>
+                <pre
+                  className="code-highlight min-w-0 flex-1 whitespace-pre-wrap px-2 py-0 text-red-200/80"
+                  dangerouslySetInnerHTML={{ __html: highlightLine(row.text, path) || " " }}
+                />
               </div>
             );
           }
@@ -311,7 +387,7 @@ export function CodeEditor({
             <div
               key={`ln-${row.line}-${index}`}
               data-file-line={row.line}
-              className={cn("flex", row.mark === "add" && "bg-emerald-400/[0.10]")}
+              className={cn("relative flex", row.mark === "add" && "bg-emerald-400/[0.10]")}
             >
               <div
                 className={cn(
@@ -322,23 +398,45 @@ export function CodeEditor({
               >
                 {row.line}
               </div>
-              <textarea
-                value={row.text}
-                rows={1}
-                spellCheck={false}
-                onChange={(event) => replaceLine(row.line, event.target.value)}
-                onKeyDown={(event) => onLineKey(event, row.line, row.text)}
-                onPaste={(event) => onLinePaste(event, row.line, row.text)}
-                onInput={(event) => {
-                  const node = event.currentTarget;
-                  node.style.height = "auto";
-                  node.style.height = `${node.scrollHeight}px`;
-                }}
-                className={cn(
-                  "min-w-0 flex-1 resize-none overflow-hidden bg-transparent px-2 py-0 outline-none",
-                  row.mark === "add" && "text-emerald-50/90",
-                )}
-              />
+              <div className="relative min-w-0 flex-1">
+                <pre
+                  aria-hidden
+                  className={cn(
+                    "code-highlight pointer-events-none absolute inset-0 whitespace-pre-wrap px-2 py-0",
+                    row.mark === "add" && "text-emerald-50/90",
+                  )}
+                  dangerouslySetInnerHTML={{ __html: highlightLine(row.text, path) || " " }}
+                />
+                <textarea
+                  value={row.text}
+                  rows={1}
+                  spellCheck={false}
+                  onChange={(event) => replaceLine(row.line, event.target.value)}
+                  onKeyDown={(event) => onLineKey(event, row.line, row.text)}
+                  onPaste={(event) => onLinePaste(event, row.line, row.text)}
+                  onSelect={(event) => {
+                    const start = event.currentTarget.selectionStart;
+                    const end = event.currentTarget.selectionEnd;
+                    if (start === end) {
+                      setSelection(null);
+                      return;
+                    }
+                    const from = Math.min(start, end);
+                    const to = Math.max(start, end);
+                    setSelection({
+                      startLine: row.line,
+                      endLine: row.line,
+                      text: row.text.slice(from, to),
+                    });
+                  }}
+                  onInput={(event) => {
+                    const node = event.currentTarget;
+                    node.style.height = "auto";
+                    node.style.height = `${node.scrollHeight}px`;
+                  }}
+                  className="code-input relative z-10 min-w-0 w-full flex-1 resize-none overflow-hidden bg-transparent px-2 py-0 outline-none"
+                />
+              </div>
             </div>
           );
         })}

@@ -85,6 +85,59 @@ async def test_approval_can_be_remembered_for_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_file_write_run_grant_covers_other_edit_tools() -> None:
+    broker = ApprovalBroker(EventBus())
+    decision = PolicyDecision(
+        allowed=True,
+        risk=RiskLevel.MEDIUM,
+        requires_approval=True,
+        reason="workspace modification",
+    )
+    first = asyncio.create_task(
+        broker.request(
+            "session",
+            ToolCall(id="one", name="write_file", arguments={"path": "a.py"}),
+            decision,
+        )
+    )
+    await asyncio.sleep(0)
+    approval = broker.pending("session")[0]
+    broker.resolve(approval.id, True, scope="run")
+    assert await first is True
+
+    replaced = await broker.request(
+        "session",
+        ToolCall(id="two", name="replace_in_file", arguments={"path": "b.py"}),
+        decision,
+    )
+    command = asyncio.create_task(
+        broker.request(
+            "session",
+            ToolCall(id="three", name="run_command", arguments={"command": "pytest"}),
+            decision,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert replaced is True
+    assert broker.pending("session")[0].call.name == "run_command"
+    broker.resolve(broker.pending("session")[0].id, False)
+    assert await command is False
+    broker.clear_run("session")
+    again = asyncio.create_task(
+        broker.request(
+            "session",
+            ToolCall(id="four", name="write_file", arguments={"path": "c.py"}),
+            decision,
+        )
+    )
+    await asyncio.sleep(0)
+    assert broker.pending("session")[0].call.name == "write_file"
+    broker.resolve(broker.pending("session")[0].id, False)
+    assert await again is False
+
+
+@pytest.mark.asyncio
 async def test_session_service_persists_messages_and_result(tmp_path: Path) -> None:
     model = FakeModel([ModelResponse(text="Analysis complete.")])
     service = SessionService(
@@ -271,6 +324,31 @@ async def test_resume_marks_unfinished_tool_and_checks_workspace(tmp_path: Path)
     other.mkdir()
     with pytest.raises(ValueError, match="workspace differs"):
         service.resume(config(other), "resume", "Continue.")
+
+
+@pytest.mark.asyncio
+async def test_resume_accepts_workspace_after_metadata_is_updated(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    with SQLiteStorage(database) as storage:
+        storage.create_session(
+            "move-ws",
+            metadata={
+                "workspace": tmp_path.as_posix(),
+                "task": "resume",
+                "mode": "build",
+            },
+        )
+        storage.append_message("move-ws", Message(role="user", content="previous"))
+        storage.patch_session_metadata("move-ws", {"workspace": moved.as_posix()})
+    service = SessionService(
+        database,
+        model_factory=lambda _config: FakeModel([ModelResponse(text="ok")]),
+    )
+
+    result = await service.resume(config(moved), "move-ws", "Continue.").task
+    assert result.status is AgentStatus.COMPLETED
 
 
 @pytest.mark.asyncio

@@ -5,10 +5,23 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 from forge_agent.application.events import EventBus
 from forge_agent.safety import PolicyDecision, RiskLevel
 from forge_agent.types import ToolCall
+
+ApprovalScope = Literal["once", "run", "session"]
+
+FILE_WRITE_TOOLS = frozenset({"write_file", "replace_in_file", "delete_file"})
+
+
+def grant_key(tool_name: str) -> str:
+    """Group workspace file mutations so one approval covers the rest of the task."""
+
+    if tool_name in FILE_WRITE_TOOLS:
+        return "workspace_write"
+    return tool_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +38,11 @@ class ApprovalBroker:
         self.events = events
         self._pending: dict[str, tuple[PendingApproval, asyncio.Future[bool]]] = {}
         self._session_grants: set[tuple[str, str]] = set()
+        self._run_grants: set[tuple[str, str]] = set()
+
+    def has_grant(self, session_id: str, tool_name: str) -> bool:
+        key = (session_id, grant_key(tool_name))
+        return key in self._session_grants or key in self._run_grants
 
     async def request(
         self,
@@ -32,11 +50,11 @@ class ApprovalBroker:
         call: ToolCall,
         decision: PolicyDecision,
     ) -> bool:
-        if (session_id, call.name) in self._session_grants:
+        if self.has_grant(session_id, call.name):
             self.events.publish(
                 session_id,
                 "approval_reused",
-                {"tool": call.name, "scope": "session"},
+                {"tool": call.name, "scope": "grant", "grant": grant_key(call.name)},
             )
             return True
         request_id = uuid.uuid4().hex
@@ -53,6 +71,7 @@ class ApprovalBroker:
                 "arguments": call.arguments,
                 "risk": decision.risk.value,
                 "reason": decision.reason,
+                "grant": grant_key(call.name),
             },
         )
         try:
@@ -100,6 +119,7 @@ class ApprovalBroker:
         approved: bool,
         *,
         remember_for_session: bool = False,
+        scope: ApprovalScope | None = None,
     ) -> bool:
         item = self._pending.get(approval_id)
         if item is None:
@@ -107,8 +127,15 @@ class ApprovalBroker:
         approval, future = item
         if future.done():
             return False
-        if approved and remember_for_session:
-            self._session_grants.add((approval.session_id, approval.call.name))
+        resolved_scope: ApprovalScope = scope or (
+            "session" if remember_for_session else "once"
+        )
+        if approved and resolved_scope != "once":
+            key = (approval.session_id, grant_key(approval.call.name))
+            if resolved_scope == "session":
+                self._session_grants.add(key)
+            else:
+                self._run_grants.add(key)
         future.set_result(approved)
         self.events.publish(
             approval.session_id,
@@ -116,7 +143,7 @@ class ApprovalBroker:
             {
                 "approval_id": approval_id,
                 "approved": approved,
-                "scope": "session" if remember_for_session else "once",
+                "scope": resolved_scope,
             },
         )
         return True
@@ -131,8 +158,12 @@ class ApprovalBroker:
         for approval in self.pending(session_id):
             self.resolve(approval.id, False)
 
+    def clear_run(self, session_id: str) -> None:
+        self._run_grants = {grant for grant in self._run_grants if grant[0] != session_id}
+
     def clear_session(self, session_id: str) -> None:
         self.reject_for_session(session_id)
         self._session_grants = {
             grant for grant in self._session_grants if grant[0] != session_id
         }
+        self.clear_run(session_id)

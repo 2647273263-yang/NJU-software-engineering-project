@@ -31,6 +31,12 @@ error handling, persistence, and evidence-based completion are implemented in th
 - Evidence-backed completion: verification results are valid only for the latest workspace
   version. Failed verification becomes a structured debug hypothesis and is retired after two
   identical experiments.
+- For complex coding tasks, a type:prompt stop hook starts an independent LLM Judge after
+  `CompletionJudge` accepts. The inspector can block stopping at most twice per run.
+- A `before_tool` hook blocks destructive shell such as `rm -rf` (including `sudo` / `bash -c`
+  wrappers) and commands that read secrets (`.env`, SSH keys) or copy files out of the
+  workspace. Those commands never run and never prompt for approval. Disable with
+  `.forge/hooks.json`: `{"block_dangerous_bash": false}` or `{"block_secret_shell": false}`.
 - Automatic verification after edits when a preferred or inferred command is available.
 - Local React chat UI (shadcn-style) served by FastAPI, with live WebSocket events, unified diff,
   verification evidence, context compaction, session resume, cancellation, and non-blocking approval.

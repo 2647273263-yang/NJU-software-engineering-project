@@ -205,6 +205,85 @@ def test_hypothesis_and_workspace_summary_have_chinese_titles() -> None:
     assert "+2/-1" in summary.detail
 
 
+def test_judge_events_are_plain_chinese_process_items() -> None:
+    started = event_to_view(event("judge_started", {"attempt": 1, "type": "prompt"}))
+    finished = event_to_view(
+        event(
+            "judge_finished",
+            {
+                "accepted": False,
+                "reason": "quicksort is missing",
+                "missing": ["quicksort.py"],
+            },
+        )
+    )
+    assert started.title == "评判器正在验收"
+    assert started.process is True
+    assert finished.title == "评判器认为还没做完"
+    assert "quicksort.py" in finished.detail
+    assert finished.answer is False
+
+
+def test_hook_denied_is_plain_chinese() -> None:
+    denied = event_to_view(
+        event(
+            "hook_denied",
+            {
+                "hook_id": "block_dangerous_bash",
+                "event": "before_tool",
+                "pattern": "rm -rf",
+                "reason": "blocked",
+            },
+        )
+    )
+    finished = event_to_view(
+        event(
+            "tool_finished",
+            {
+                "name": "run_command",
+                "ok": False,
+                "error_code": "hook_denied",
+                "summary": "blocked",
+                "metadata": {"pattern": "rm -rf"},
+                "arguments": {"command": "sudo rm -rf /"},
+            },
+        )
+    )
+    assert denied.title == "已拦住危险命令"
+    assert "rm -rf" in denied.detail
+    assert finished.title == "已拦住危险命令"
+
+
+def test_secret_shell_denied_is_plain_chinese() -> None:
+    denied = event_to_view(
+        event(
+            "hook_denied",
+            {
+                "hook_id": "block_secret_shell",
+                "event": "before_tool",
+                "pattern": ".env",
+                "reason": "blocked",
+            },
+        )
+    )
+    finished = event_to_view(
+        event(
+            "tool_finished",
+            {
+                "name": "run_command",
+                "ok": False,
+                "error_code": "hook_denied",
+                "summary": "blocked",
+                "metadata": {"hook_id": "block_secret_shell", "pattern": ".env"},
+                "arguments": {"command": "type .env"},
+            },
+        )
+    )
+    assert denied.title == "已拦住读密钥或出沙箱"
+    assert ".env" in denied.detail
+    assert finished.title == "已拦住读密钥或出沙箱"
+
+
 def test_final_model_text_is_an_answer_not_run_status() -> None:
     answer = event_to_view(
         event(

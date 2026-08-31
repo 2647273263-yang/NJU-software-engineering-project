@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from forge_agent.agent.completion import CompletionJudge
+from forge_agent.agent.llm_judge import is_complex_coding_stop
 from forge_agent.agent.plan_gate import uses_readonly_plan, wants_plan_first
 from forge_agent.agent.prompts import (
     build_system_prompt,
@@ -16,6 +17,9 @@ from forge_agent.agent.prompts import (
 )
 from forge_agent.agent.state import AgentState
 from forge_agent.config import RunConfig
+from forge_agent.hooks import HookRunner
+from forge_agent.hooks.runner import evidence_lines_for_judge
+from forge_agent.hooks.spec import HookType, stop_hooks
 from forge_agent.model.base import ContextOverflowError, ModelClient, ModelError
 from forge_agent.safety.policy import (
     PARALLEL_READ_LIMIT,
@@ -127,6 +131,7 @@ class AgentLoop:
         on_plan_approval: PlanApprovalCallback | None = None,
         on_mode_change: ModeChangeCallback | None = None,
         verification_commands: list[str] | None = None,
+        hooks: HookRunner | None = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -137,6 +142,12 @@ class AgentLoop:
         self.on_plan_approval = on_plan_approval
         self.on_mode_change = on_mode_change
         self.completion_judge = CompletionJudge()
+        self.hooks = hooks or HookRunner.load(
+            config.workspace,
+            model,
+            on_event=self.on_event,
+        )
+        self._task = ""
         self.verification_commands = list(
             dict.fromkeys(
                 [config.verify_command]
@@ -158,6 +169,7 @@ class AgentLoop:
     ) -> RunResult:
         self.state.set_status(AgentStatus.INITIALIZING)
         self.state.begin_run()
+        self._task = task
         self._plan_gate = wants_plan_first(task, mode=self.config.mode)
         self._plan_resolved = False
         prompt_mode = (
@@ -331,7 +343,11 @@ class AgentLoop:
                         self.on_event("verification_required", {"step": self.state.steps})
                         continue
                     self._append_message(Message(role="assistant", content=response.text))
-                    summary = response.text.strip()
+                    if decision.accepted:
+                        blocked = await self._apply_stop_hooks(response.text or "")
+                        if blocked:
+                            continue
+                    summary = (response.text or "").strip()
                     if not decision.accepted:
                         summary += f"\n\nCompletion evidence: {decision.reason}"
                     return self._finish(decision.status, summary)
@@ -368,7 +384,7 @@ class AgentLoop:
             if stopped is not None:
                 return stopped
             self._emit_tool_started(call)
-            result = await self.tools.execute(call)
+            result = await self._execute_guarded(call)
             exhausted = self._record_tool_result(call, result)
             if exhausted:
                 return self._finish(
@@ -460,7 +476,7 @@ class AgentLoop:
 
             async def run(call: ToolCall) -> ToolResult:
                 async with limit:
-                    return await self.tools.execute(call)
+                    return await self._execute_guarded(call)
 
             results = await asyncio.gather(*(run(call) for call in to_run))
             for call, result in zip(to_run, results, strict=True):
@@ -494,6 +510,12 @@ class AgentLoop:
             "tool_started",
             {"call_id": call.id, "name": call.name, "arguments": call.arguments},
         )
+
+    async def _execute_guarded(self, call: ToolCall) -> ToolResult:
+        decision = self.hooks.before_tool(call)
+        if not decision.allowed:
+            return decision.as_result()
+        return await self.tools.execute(call)
 
     def _record_tool_result(self, call: ToolCall, result: ToolResult) -> bool:
         exhausted = self._apply_tool_metadata(call, result)
@@ -546,7 +568,7 @@ class AgentLoop:
                     "automatic": True,
                 },
             )
-            result = await self.tools.execute(call)
+            result = await self._execute_guarded(call)
             exhausted = self._apply_tool_metadata(call, result)
             self._append_message(
                 Message(
@@ -591,6 +613,75 @@ class AgentLoop:
             content=task,
             attachments=list(self.config.user_image_data_urls),
         )
+
+    async def _apply_stop_hooks(self, last_reply: str) -> bool:
+        """Return True when a type:prompt stop hook blocked completion."""
+
+        if self.state.llm_judge_attempts >= self.hooks.config.max_judge_attempts:
+            return False
+        enabled = stop_hooks(self.hooks.config)
+        if not enabled:
+            return False
+        if not any(spec.type is HookType.PROMPT for spec in enabled):
+            return False
+        only_builtin_judge = all(spec.id == "llm_judge" for spec in enabled)
+        if only_builtin_judge and not is_complex_coding_stop(self._task, self.state):
+            return False
+        attempt = self.state.llm_judge_attempts + 1
+        self.on_event(
+            "judge_started",
+            {
+                "step": self.state.steps,
+                "attempt": attempt,
+                "event": "stop_attempted",
+                "type": "prompt",
+                "hook_id": "llm_judge",
+            },
+        )
+        decision = await self.hooks.on_stop_attempted(
+            task=self._task,
+            last_reply=last_reply,
+            state=self.state,
+            evidence_lines=evidence_lines_for_judge(
+                changed_files=sorted(self.state.run_changed_files),
+                verification=self.state.verification,
+            ),
+            timeout_s=self.config.model_timeout_s,
+        )
+        call_cost = self._account_usage(decision.usage)
+        self.on_event(
+            "judge_finished",
+            {
+                "step": self.state.steps,
+                "attempt": attempt,
+                "accepted": decision.allow_stop,
+                "reason": decision.reason,
+                "missing": decision.missing,
+                "hook_id": decision.hook_id or "llm_judge",
+                "type": "prompt",
+                "parse_error": decision.parse_error,
+                "skipped": decision.skipped,
+                "tokens": decision.usage.total_tokens,
+                "call_cost_usd": call_cost,
+                "total_cost_usd": self.state.total_cost_usd,
+            },
+        )
+        if decision.allow_stop or decision.skipped:
+            return False
+        self.state.llm_judge_attempts = attempt
+        self._append_message(Message(role="user", content=decision.inject_message()))
+        return True
+
+    def _account_usage(self, usage: Any) -> float:
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        self.state.total_tokens += input_tokens + output_tokens
+        call_cost = (
+            input_tokens * self.config.input_cost_per_million
+            + output_tokens * self.config.output_cost_per_million
+        ) / 1_000_000
+        self.state.total_cost_usd += call_cost
+        return call_cost
 
     def _append_message(self, message: Message) -> None:
         self.messages.append(message)

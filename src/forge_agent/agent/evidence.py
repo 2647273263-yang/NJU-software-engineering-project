@@ -173,6 +173,34 @@ class EvidenceLedger(BaseModel):
                     ],
                 )
             )
+        judge_events = [payload for kind, payload in event_list if kind == "judge_finished"]
+        if judge_events:
+            last = judge_events[-1]
+            accepted = bool(last.get("accepted"))
+            reason = str(last.get("reason") or "").strip()
+            missing = last.get("missing")
+            missing_items = (
+                [str(item) for item in missing if str(item).strip()]
+                if isinstance(missing, list)
+                else []
+            )
+            claims.append(
+                Claim(
+                    statement=(
+                        "LLM Judge accepted the run"
+                        if accepted
+                        else "LLM Judge blocked stopping"
+                    ),
+                    status=ClaimStatus.PROVEN if accepted else ClaimStatus.UNPROVEN,
+                    evidence=[
+                        Evidence(
+                            kind="llm_judge",
+                            description=reason or ("accepted" if accepted else "blocked"),
+                            reference="; ".join(missing_items[:6]) or None,
+                        )
+                    ],
+                )
+            )
         return cls(claims=claims)
 
     @staticmethod

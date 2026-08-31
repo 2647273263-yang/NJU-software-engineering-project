@@ -5,10 +5,22 @@ import type { TimelineView } from "../lib/types";
 
 function visibleProcessItems(items: TimelineView[]): TimelineView[] {
   return items.filter((item, index) => {
-    if (item.kind !== "tool_started") return true;
-    return !items.slice(index + 1).some(
-      (later) => later.kind === "tool_finished" || later.kind === "approval_requested",
-    );
+    const later = items.slice(index + 1);
+    if (item.kind === "tool_started") {
+      return !later.some(
+        (entry) =>
+          entry.kind === "tool_finished" ||
+          entry.kind === "approval_requested" ||
+          entry.kind === "hook_denied",
+      );
+    }
+    if (item.kind === "judge_started") {
+      return !later.some((entry) => entry.kind === "judge_finished");
+    }
+    if (item.kind === "tool_finished" && item.title.startsWith("已拦住")) {
+      return !items.some((entry) => entry.kind === "hook_denied");
+    }
+    return true;
   });
 }
 
@@ -23,16 +35,26 @@ export function ProcessGroup({ items, openDefault }: { items: TimelineView[]; op
   const visible = visibleProcessItems(items);
   const current = visible[visible.length - 1];
   const headlines = visible
-    .filter((item) => item.kind === "tool_finished" || item.kind === "automatic_verification_finished")
+    .filter(
+      (item) =>
+        item.kind === "tool_finished" ||
+        item.kind === "automatic_verification_finished" ||
+        item.kind === "judge_finished" ||
+        item.kind === "hook_denied",
+    )
     .map((item) => item.title);
   const summary =
     current?.kind === "approval_requested"
       ? current.title
-      : current?.kind === "tool_started"
-        ? `正在${current.title}…`
-        : headlines.length > 0
-          ? headlines.slice(0, 3).join(" · ") + (headlines.length > 3 ? ` 等 ${headlines.length} 项` : "")
-          : `${visible.length} 个步骤`;
+      : current?.kind === "judge_started"
+        ? "评判器正在验收…"
+      : current?.kind === "hook_denied"
+        ? current.title
+        : current?.kind === "tool_started"
+          ? `正在${current.title}…`
+          : headlines.length > 0
+            ? headlines.slice(0, 3).join(" · ") + (headlines.length > 3 ? ` 等 ${headlines.length} 项` : "")
+            : `${visible.length} 个步骤`;
 
   return (
     <div className="pl-0.5">

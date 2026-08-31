@@ -23,6 +23,7 @@ class AgentState:
     run_changed_files: set[str] = field(default_factory=set)
     verification: VerificationRecord | None = None
     completion_nudge_sent: bool = False
+    llm_judge_attempts: int = 0
     consecutive_empty_responses: int = 0
     repeated_actions: Counter[str] = field(default_factory=Counter)
     last_error: str | None = None
@@ -34,6 +35,7 @@ class AgentState:
     def begin_run(self) -> None:
         self.run_changed_files.clear()
         self.completion_nudge_sent = False
+        self.llm_judge_attempts = 0
 
     @property
     def needs_verification(self) -> bool:

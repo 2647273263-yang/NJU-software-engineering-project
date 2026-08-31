@@ -80,6 +80,19 @@ def event_to_view(
                 "warning",
                 process=True,
             )
+        if error == "hook_denied":
+            metadata = payload.get("metadata")
+            extra = metadata if isinstance(metadata, dict) else {}
+            return TimelineItem(
+                event.kind,
+                _hook_denied_title(str(extra.get("hook_id") or payload.get("hook_id") or "")),
+                _hook_denied_detail(
+                    str(extra.get("pattern") or payload.get("pattern") or "").strip(),
+                    str(extra.get("hook_id") or payload.get("hook_id") or ""),
+                ),
+                "danger",
+                process=True,
+            )
         if error == "timeout":
             arguments = payload.get("arguments")
             args = arguments if isinstance(arguments, dict) else {}
@@ -230,6 +243,61 @@ def event_to_view(
             "success" if payload.get("passed") else "warning",
             process=True,
         )
+    if event.kind == "judge_started":
+        attempt = int(payload.get("attempt") or 1)
+        return TimelineItem(
+            event.kind,
+            "评判器正在验收",
+            f"第 {attempt} 次 · 对照原任务检查是否真的做完",
+            "active",
+            process=True,
+        )
+    if event.kind == "judge_finished":
+        accepted = bool(payload.get("accepted"))
+        missing = payload.get("missing")
+        gaps = (
+            "；".join(str(item) for item in missing if str(item).strip())
+            if isinstance(missing, list)
+            else ""
+        )
+        reason = str(payload.get("reason") or "").strip()
+        detail = reason
+        if not accepted and gaps:
+            detail = f"{reason} 缺口：{gaps}" if reason else f"缺口：{gaps}"
+        return TimelineItem(
+            event.kind,
+            "评判器通过" if accepted else "评判器认为还没做完",
+            detail,
+            "success" if accepted else "warning",
+            process=True,
+        )
+    if event.kind == "hook_failed":
+        return TimelineItem(
+            event.kind,
+            "Hook 没有成功执行",
+            str(payload.get("error") or payload.get("reason") or "prompt hook 返回无法解析"),
+            "warning",
+            process=True,
+        )
+    if event.kind == "hook_skipped":
+        return TimelineItem(
+            event.kind,
+            "已跳过 command hook",
+            str(payload.get("reason") or "默认不执行任意脚本"),
+            "info",
+            process=True,
+        )
+    if event.kind == "hook_denied":
+        return TimelineItem(
+            event.kind,
+            _hook_denied_title(str(payload.get("hook_id") or "")),
+            _hook_denied_detail(
+                str(payload.get("pattern") or "").strip(),
+                str(payload.get("hook_id") or ""),
+            ),
+            "danger",
+            process=True,
+        )
     if event.kind == "workspace_summary":
         if payload.get("available"):
             detail = (
@@ -292,6 +360,22 @@ def event_to_view(
         json.dumps(payload, ensure_ascii=False)[:500],
         process=True,
     )
+
+
+def _hook_denied_title(hook_id: str) -> str:
+    if hook_id == "block_secret_shell":
+        return "已拦住读密钥或出沙箱"
+    return "已拦住危险命令"
+
+
+def _hook_denied_detail(pattern: str, hook_id: str) -> str:
+    if hook_id == "block_secret_shell":
+        if pattern:
+            return f"匹配到 {pattern}。不能用命令读密钥或把文件拷出工作区。"
+        return "不能用命令读密钥或把文件拷出工作区。"
+    if pattern:
+        return f"匹配到 {pattern}。这条命令不会执行，也不会再弹出确认。"
+    return "这条命令不会执行，也不会再弹出确认。"
 
 
 def _command_headline(command: str) -> str:

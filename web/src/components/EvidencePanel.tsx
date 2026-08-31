@@ -10,6 +10,7 @@ const KIND: Record<string, { label: string; Icon: typeof FileDiff }> = {
   recovery: { label: "后来通过", Icon: CheckCircle2 },
   hypothesis: { label: "排查方向", Icon: CircleHelp },
   git_status: { label: "未提交改动", Icon: GitBranch },
+  llm_judge: { label: "评判器", Icon: ShieldQuestion },
 };
 
 function kindsOf(claim: ClaimRow): string[] {
@@ -41,6 +42,20 @@ function outcome(claim: ClaimRow): {
       label: "检查没过",
       className: "bg-amber-500/10 text-amber-300",
       Icon: CircleAlert,
+    };
+  }
+  if (kinds.includes("llm_judge") && claim.status === "proven") {
+    return {
+      label: "评判器通过",
+      className: "bg-emerald-500/10 text-emerald-300",
+      Icon: CheckCircle2,
+    };
+  }
+  if (kinds.includes("llm_judge")) {
+    return {
+      label: "评判器未通过",
+      className: "bg-amber-500/10 text-amber-300",
+      Icon: ShieldQuestion,
     };
   }
   if (kinds.includes("missing_verification")) {
@@ -102,6 +117,12 @@ function humanStatement(claim: ClaimRow): string {
   if (statement === "The latest workspace changes were verified") {
     return "改了文件，但还没有跑测试或检查。对话里如果说「修好了」，这里还不能当真。";
   }
+  if (statement === "LLM Judge accepted the run") {
+    return "评判器对照原任务看过了，认为可以结束。检查是否通过仍以上面的命令记录为准。";
+  }
+  if (statement === "LLM Judge blocked stopping") {
+    return "评判器认为原任务还没做完，已经拦住结束并让 Agent 继续。";
+  }
   if (statement === "Recovered from a failed verification") {
     return "检查先失败过一次，后来又跑通了。";
   }
@@ -152,7 +173,7 @@ export function EvidencePanel({ claims }: { claims: ClaimRow[] }) {
       <div className="mb-3 space-y-1">
         <h2 className="text-[13px] font-medium">本轮验收</h2>
         <p className="text-[12px] leading-5 text-muted-foreground">
-          用来核对 Agent 这一轮实际做了什么：改了哪些文件、有没有跑测试或检查、过没过。可以据此决定要不要接受改动，或让它再试一次。存档、分支和恢复请用「版本」。
+          用来核对 Agent 这一轮实际做了什么：改了哪些文件、有没有跑测试或检查、过没过。复杂任务结束前还会多一层评判器对照原话验收。可以据此决定要不要接受改动，或让它再试一次。存档、分支和恢复请用「版本」。
         </p>
       </div>
       {visible.length === 0 ? (

@@ -406,11 +406,14 @@ export default function App() {
       const view = events[index]?.view;
       if (!view) continue;
       if (view.kind === "approval_requested") return view.title;
+      if (view.kind === "judge_started") return "评判器正在验收…";
+      if (view.kind === "hook_denied" || view.title.startsWith("已拦住")) return view.title;
       if (view.kind === "tool_started") return `正在${view.title}…`;
       if (
         view.kind === "tool_finished" ||
         view.kind === "model_response" ||
-        view.kind === "automatic_verification_finished"
+        view.kind === "automatic_verification_finished" ||
+        view.kind === "judge_finished"
       ) {
         break;
       }

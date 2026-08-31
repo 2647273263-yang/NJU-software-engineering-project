@@ -72,3 +72,31 @@ def test_workspace_summary_omitted_when_git_is_unavailable() -> None:
     )
 
     assert ledger.claims == []
+
+
+def test_llm_judge_event_becomes_acceptance_claim() -> None:
+    blocked = EvidenceLedger.from_run_result(
+        RunResult(status=AgentStatus.COMPLETED, summary="done", steps=4, model_calls=4),
+        events=[
+            (
+                "judge_finished",
+                {
+                    "accepted": False,
+                    "reason": "quicksort is missing",
+                    "missing": ["quicksort.py"],
+                },
+            ),
+            (
+                "judge_finished",
+                {
+                    "accepted": True,
+                    "reason": "requested sorts are present",
+                    "missing": [],
+                },
+            ),
+        ],
+    )
+    claim = blocked.claims[-1]
+    assert claim.statement == "LLM Judge accepted the run"
+    assert claim.status is ClaimStatus.PROVEN
+    assert claim.evidence[0].kind == "llm_judge"

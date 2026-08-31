@@ -21,6 +21,8 @@ venv/
 logs/
 sessions/
 .forge-uploads/
+.forge/
+
 
 .idea/
 .vscode/

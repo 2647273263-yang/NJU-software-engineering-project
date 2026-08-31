@@ -197,6 +197,7 @@ def resume(
             Path(str(metadata["workspace"])),
             mode=RunMode(str(metadata.get("mode", RunMode.BUILD.value))),
             verify_command=metadata.get("verify_command"),
+            extra_rules=str(metadata.get("extra_rules") or "") or None,
             auto_approve=auto_approve,
         )
     except (KeyError, ValueError) as exc:

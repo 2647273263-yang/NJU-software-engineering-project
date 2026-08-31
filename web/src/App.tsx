@@ -54,6 +54,7 @@ import { EvidencePanel } from "./components/EvidencePanel";
 import { FileTree, flattenFiles } from "./components/FileTree";
 import { GitPanel } from "./components/GitPanel";
 import { InspectorWorkspace, type InspectorHandle, type InspectorPage } from "./components/InspectorWorkspace";
+import { MemoryPanel } from "./components/MemoryPanel";
 import { ProcessGroup } from "./components/ProcessGroup";
 import { SplitHandle } from "./components/SplitHandle";
 import { WorkspaceTerminal } from "./components/WorkspaceTerminal";
@@ -133,12 +134,78 @@ function groupEvents(events: SessionEvent[], streamText: string): ChatBlock[] {
     if (last?.type === "process") last.items.push(view);
     else blocks.push({ type: "process", items: [view] });
   }
-  if (streamText) {
+  if (streamText && !looksLikeModelDump(streamText)) {
     const last = blocks[blocks.length - 1];
     if (last?.type === "assistant" && last.streaming) last.text = streamText;
     else blocks.push({ type: "assistant", text: streamText, streaming: true });
   }
   return blocks;
+}
+
+function looksLikeModelDump(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("```json")) return true;
+  return /"name"\s*:\s*"(?:read_file|write_file|replace_in_file|delete_file|run_command|search_text|list_files)"/.test(
+    trimmed,
+  );
+}
+
+function commandHeadline(command: string): string {
+  const text = command.trim().replace(/\s+/g, " ");
+  if (!text) return "命令";
+  const lower = text.toLowerCase();
+  if (/%[a-z]\.py\b/.test(lower) || (/\bfor\s+%[a-z]\b/.test(lower) && lower.includes("python"))) {
+    return "工作区脚本";
+  }
+  if (/(?:^|[;&|]\s*)(?:python(?:3)?|py)(?:\s+-\w+)*\s+-c\b/.test(lower)) return "Python 代码";
+  if (/(?:^|[;&|]\s*)node\s+-e\b/.test(lower)) return "Node 代码";
+  if (/powershell.*-(?:command|c)\b/i.test(text) || /(?:^|[;&|]\s*)pwsh(?:\.exe)?\s+-c\b/.test(lower)) {
+    return "PowerShell 脚本";
+  }
+  const file = text.match(/(?:python(?:3)?|py)\s+(?:-[XB]\s+)*(?!-m\b)(\S+\.py)\b/i);
+  if (file) {
+    const parts = file[1].replaceAll("\\", "/").split("/");
+    return parts[parts.length - 1] || file[1];
+  }
+  return text.length <= 48 ? text : `${text.slice(0, 45)}…`;
+}
+
+function approvalHint(approval: PendingApproval | null, status: string): string {
+  if (status === "awaiting_plan_approval" || approval?.kind === "plan") return "等待你确认方案";
+  if (approval && FILE_WRITE_TOOLS.has(approval.tool)) return "等待你允许写入文件";
+  if (approval?.tool === "run_command") {
+    return `等待你批准：运行 ${commandHeadline(String(approval.arguments.command ?? ""))}`;
+  }
+  if (status === "awaiting_approval" || approval) return "等待你批准这次操作";
+  return "";
+}
+
+function approvalReasonText(approval: PendingApproval): string {
+  if (approval.kind === "plan") {
+    return "方案已在上方对话中。点「执行」才改代码，点「先不改」则停在方案。";
+  }
+  if (FILE_WRITE_TOOLS.has(approval.tool)) {
+    return "允许后，本轮任务里再写文件、改文件或删文件都不再询问。运行命令仍会逐次确认。";
+  }
+  const mapped: Record<string, string> = {
+    "commands can cause side effects": "这条命令可能改文件或产生其它影响，需要你点头后才会执行。",
+    "installing dependencies can change the workspace": "安装依赖会改动工作区，需要你点头后才会执行。",
+    "network commands can cause side effects": "这条命令会访问网络，需要你点头后才会执行。",
+    "workspace content modification": "将改写工作区里的文件。",
+  };
+  return mapped[approval.reason] ?? "需要你确认后才会继续。";
+}
+
+function approvalActionLine(approval: PendingApproval): string | null {
+  if (approval.kind === "plan") return null;
+  const path = typeof approval.arguments.path === "string" ? approval.arguments.path.replaceAll("\\", "/") : "";
+  const file = path.split("/").filter(Boolean).pop();
+  if (FILE_WRITE_TOOLS.has(approval.tool) && file) return `文件：${file}`;
+  if (approval.tool === "run_command") {
+    return `将运行：${commandHeadline(String(approval.arguments.command ?? ""))}`;
+  }
+  return null;
 }
 
 function costValue(raw: string): number | null {
@@ -273,6 +340,7 @@ export default function App() {
   const [chatRefs, setChatRefs] = useState<ChatRef[]>([]);
   const [dropActive, setDropActive] = useState(false);
   const [resolvedDiffs, setResolvedDiffs] = useState<Record<string, string>>({});
+  const [memoryRevision, setMemoryRevision] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedId;
@@ -332,13 +400,26 @@ export default function App() {
   }, [events]);
   const liveHint = useMemo(() => {
     if (!running) return "";
+    const waiting = approvalHint(approval, status);
+    if (waiting) return waiting;
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const view = events[index]?.view;
-      if (view?.kind === "tool_started") return `正在${view.title}`;
-      if (view?.kind === "approval_requested") return view.title;
+      if (!view) continue;
+      if (view.kind === "approval_requested") return view.title;
+      if (view.kind === "tool_started") return `正在${view.title}…`;
+      if (
+        view.kind === "tool_finished" ||
+        view.kind === "model_response" ||
+        view.kind === "automatic_verification_finished"
+      ) {
+        break;
+      }
     }
-    return STATUS_LABEL[status] ?? "运行中";
-  }, [events, running, status]);
+    if (looksLikeModelDump(streamText)) return "思考中…";
+    const label = STATUS_LABEL[status];
+    if (label === "思考中") return "思考中…";
+    return label ?? "运行中";
+  }, [approval, events, running, status, streamText]);
   const canRetry = Boolean(selectedId && !running && lastUserText && RETRY_STATUSES.has(status));
 
   function persistResolved(sessionId: string | null, value: Record<string, string>) {
@@ -613,13 +694,23 @@ export default function App() {
           void refreshTree(settingsRef.current.workspace);
           void api.session(event.session_id, settingsRef.current.demo).then((data) => {
             setClaims(data.claims);
-            setEvents(data.events);
+            setEvents((current) => {
+              const extras = current.filter(
+                (item) =>
+                  (item.kind === "memory_extracted" || item.kind === "memory_extract_failed") &&
+                  !data.events.some(
+                    (incoming) => incoming.kind === item.kind && incoming.created_at === item.created_at,
+                  ),
+              );
+              return extras.length ? [...data.events, ...extras] : data.events;
+            });
             setApproval(data.pending_approvals[0] ?? null);
             setResolvedDiffs((current) => ({
               ...current,
               ...readResolved(event.session_id),
               ...(data.accepted_diffs ?? {}),
             }));
+            setMemoryRevision((value) => value + 1);
           });
         }
         setSessions((current) => withRunEnded(current, event.session_id, nextStatus));
@@ -666,6 +757,7 @@ export default function App() {
         );
       }
       if (event.kind === "approval_resolved") setApproval(null);
+      if (event.kind === "memory_extracted") setMemoryRevision((value) => value + 1);
       if (event.view.path) void syncTabFromDisk(event.view.path.replaceAll("\\", "/"));
       if (event.view.diff || event.view.path) void refreshTree(settingsRef.current.workspace);
     });
@@ -742,6 +834,7 @@ export default function App() {
       max_cost: costValue(settings.max_cost),
       auto_approve: settings.auto_approve,
       demo: settings.demo,
+      extra_rules: settings.extra_rules,
       images,
     };
   }
@@ -1609,7 +1702,7 @@ export default function App() {
 
         {approval ? (
           <div className="px-4">
-          <div className="mx-auto mb-2 flex w-full max-w-[720px] items-start gap-3 rounded-md bg-amber-500/[0.08] px-3 py-2">
+          <div className="mx-auto mb-2 flex w-full max-w-[720px] items-start gap-3 rounded-md bg-amber-500/[0.12] px-3 py-2.5 ring-1 ring-amber-400/30">
             <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-400" />
             <div className="min-w-0 flex-1">
               <div className="text-[13px]">
@@ -1617,19 +1710,13 @@ export default function App() {
                   ? "是否按此方案执行？"
                   : FILE_WRITE_TOOLS.has(approval.tool)
                     ? "允许本次任务写入工作区文件？"
-                    : `需要审批：${approval.tool}`}
+                    : approvalHint(approval, status) || "需要你批准后才会继续"}
               </div>
-              <div className="text-[12px] text-muted-foreground">
-                {approval.kind === "plan"
-                  ? "方案已在上方对话中。点「执行」才改代码，点「先不改」则停在方案。"
-                  : FILE_WRITE_TOOLS.has(approval.tool)
-                    ? "允许后，本轮任务里再写文件、改文件或删文件都不再询问。运行命令仍会逐次确认。"
-                    : approval.reason}
+              <div className="mt-0.5 text-[12px] text-muted-foreground">
+                {approvalReasonText(approval)}
               </div>
-              {approval.kind === "plan" ? null : Object.keys(approval.arguments).length > 0 ? (
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-[11px] text-muted-foreground">
-                  {JSON.stringify(approval.arguments, null, 2)}
-                </pre>
+              {approvalActionLine(approval) ? (
+                <div className="mt-1 text-[12px] text-foreground/85">{approvalActionLine(approval)}</div>
               ) : null}
               <div className="mt-2 flex flex-wrap gap-2">
                 {approval.kind === "plan" ? (
@@ -1686,7 +1773,7 @@ export default function App() {
         ) : null}
 
         {error ? <div className="mx-auto mb-2 w-full max-w-[720px] px-4 text-[12.5px] text-red-400">{error}</div> : null}
-        {running && liveHint ? (
+        {running && liveHint && !approval ? (
           <div className="mx-auto mb-2 w-full max-w-[720px] px-4 text-[12.5px] text-muted-foreground">{liveHint}</div>
         ) : null}
 
@@ -2008,6 +2095,9 @@ export default function App() {
               return <GitPanel workspace={settings.workspace} onChanged={() => void refreshAfterGit()} />;
             }
             if (page.kind === "evidence") return <EvidencePanel claims={claims} />;
+            if (page.kind === "memory") {
+              return <MemoryPanel workspace={settings.workspace} revision={memoryRevision} />;
+            }
             if (page.kind === "context") return (
             <div className="h-full overflow-y-auto px-3 py-2 text-[12.5px]">
               {context ? (
@@ -2028,6 +2118,8 @@ export default function App() {
                     {[
                       ["system_tokens", "系统说明"],
                       ["project_tokens", "项目说明"],
+                      ["user_rules_tokens", "附加规则"],
+                      ["memory_tokens", "跨会话记忆"],
                       ["summary_tokens", "压缩摘要"],
                       ["recent_tokens", "最近对话"],
                       ["tool_schema_tokens", "工具说明"],
@@ -2160,6 +2252,16 @@ export default function App() {
                 value={settings.verify}
                 onChange={(event) => setSettings({ ...settings, verify: event.target.value })}
                 className="mt-1 h-8 w-full rounded-md bg-white/[0.04] px-2 text-[13px]"
+              />
+            </label>
+            <label className="mb-2 block text-[12px] text-muted-foreground">
+              附加规则
+              <textarea
+                value={settings.extra_rules}
+                onChange={(event) => setSettings({ ...settings, extra_rules: event.target.value })}
+                rows={4}
+                placeholder="本会话优先；留空则读工作区 .forge/rules.md。不能用来授权出沙箱或 git push。"
+                className="mt-1 w-full resize-none rounded-md bg-white/[0.04] px-2 py-1.5 text-[13px] outline-none"
               />
             </label>
             <div className="mb-2 grid grid-cols-3 gap-2">

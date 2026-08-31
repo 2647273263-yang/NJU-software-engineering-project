@@ -26,7 +26,24 @@ export type StartRunInput = {
   max_cost: number | null;
   auto_approve: boolean;
   demo: boolean;
+  extra_rules?: string;
   images?: string[];
+};
+
+export type MemoryItem = {
+  id: string;
+  created_at: string;
+  kind: string;
+  text: string;
+  tags: string[];
+  evidence: string;
+  status: "proposed" | "accepted";
+};
+
+export type MemoryStore = {
+  auto_extract: boolean;
+  items: MemoryItem[];
+  accepted?: number;
 };
 
 export const api = {
@@ -89,6 +106,39 @@ export const api = {
   tree: (workspace: string) =>
     parse<{ tree: TreeNode[] }>(
       fetch(`/api/workspace/tree?workspace=${encodeURIComponent(workspace)}`),
+    ),
+  memory: (workspace: string, demo = false) =>
+    parse<MemoryStore>(
+      fetch(
+        `/api/workspace/memory?workspace=${encodeURIComponent(workspace)}&demo=${demo}`,
+      ),
+    ),
+  patchMemory: (workspace: string, body: { auto_extract?: boolean; accept_all?: boolean }) =>
+    parse<MemoryStore>(
+      fetch("/api/workspace/memory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, ...body }),
+      }),
+    ),
+  updateMemory: (
+    workspace: string,
+    id: string,
+    body: { status?: string; text?: string; tags?: string[] },
+  ) =>
+    parse<{ item: MemoryItem }>(
+      fetch(`/api/workspace/memory/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, ...body }),
+      }),
+    ),
+  deleteMemory: (workspace: string, id: string) =>
+    parse<{ deleted: boolean }>(
+      fetch(
+        `/api/workspace/memory/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspace)}`,
+        { method: "DELETE" },
+      ),
     ),
   file: (workspace: string, path: string, sessionId?: string) =>
     parse<{

@@ -17,7 +17,11 @@ from forge_agent.agent.prompts import (
 from forge_agent.agent.state import AgentState
 from forge_agent.config import RunConfig
 from forge_agent.model.base import ContextOverflowError, ModelClient, ModelError
-from forge_agent.safety.policy import PARALLEL_READ_LIMIT, READ_ONLY_TOOLS
+from forge_agent.safety.policy import (
+    PARALLEL_READ_LIMIT,
+    READ_ONLY_TOOLS,
+    is_verification_command,
+)
 from forge_agent.types import (
     AgentStatus,
     Message,
@@ -611,7 +615,16 @@ class AgentLoop:
                 )
             except ValueError:
                 return False
-        elif call.name == "verify_changes" or result.metadata.get("is_verification") is True:
+        elif (
+            call.name == "verify_changes"
+            or result.metadata.get("is_verification") is True
+            or (
+                call.name == "run_command"
+                and is_verification_command(
+                    str(call.arguments.get("command") or result.metadata.get("command") or "")
+                )
+            )
+        ):
             command = str(result.metadata.get("command", call.arguments.get("command", "")))
             exit_code = int(result.metadata.get("exit_code", 0 if result.ok else 1))
             record = VerificationRecord(

@@ -3,15 +3,36 @@ import { ChevronDown } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { TimelineView } from "../lib/types";
 
+function visibleProcessItems(items: TimelineView[]): TimelineView[] {
+  return items.filter((item, index) => {
+    if (item.kind !== "tool_started") return true;
+    return !items.slice(index + 1).some(
+      (later) => later.kind === "tool_finished" || later.kind === "approval_requested",
+    );
+  });
+}
+
+function shouldShowDetail(detail: string): boolean {
+  const trimmed = detail.trim();
+  if (!trimmed || trimmed === "进行中") return false;
+  return !(trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("```"));
+}
+
 export function ProcessGroup({ items, openDefault }: { items: TimelineView[]; openDefault: boolean }) {
   const [open, setOpen] = useState(openDefault);
-  const headlines = items
+  const visible = visibleProcessItems(items);
+  const current = visible[visible.length - 1];
+  const headlines = visible
     .filter((item) => item.kind === "tool_finished" || item.kind === "automatic_verification_finished")
     .map((item) => item.title);
   const summary =
-    headlines.length > 0
-      ? headlines.slice(0, 3).join(" · ") + (headlines.length > 3 ? ` 等 ${headlines.length} 项` : "")
-      : `${items.length} 个步骤`;
+    current?.kind === "approval_requested"
+      ? current.title
+      : current?.kind === "tool_started"
+        ? `正在${current.title}…`
+        : headlines.length > 0
+          ? headlines.slice(0, 3).join(" · ") + (headlines.length > 3 ? ` 等 ${headlines.length} 项` : "")
+          : `${visible.length} 个步骤`;
 
   return (
     <div className="pl-0.5">
@@ -25,7 +46,7 @@ export function ProcessGroup({ items, openDefault }: { items: TimelineView[]; op
       </button>
       {open ? (
         <div className="ml-1.5 space-y-2 border-l border-white/[0.08] pl-3">
-          {items.map((item, index) => (
+          {visible.map((item, index) => (
             <div
               key={`${item.kind}-${index}-${item.title}`}
               className={cn(
@@ -35,7 +56,7 @@ export function ProcessGroup({ items, openDefault }: { items: TimelineView[]; op
               )}
             >
               <div className="text-[12.5px] text-foreground/85">{item.title}</div>
-              {item.detail ? (
+              {shouldShowDetail(item.detail) ? (
                 <div className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-all text-[12px] text-muted-foreground">
                   {item.detail}
                 </div>

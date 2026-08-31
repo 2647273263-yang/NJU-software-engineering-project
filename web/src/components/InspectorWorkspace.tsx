@@ -7,11 +7,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, FileCode, GitBranch, Layers, Plus, TerminalSquare, X } from "lucide-react";
+import { Bookmark, Check, FileCode, GitBranch, Layers, Plus, TerminalSquare, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import { SplitHandle } from "./SplitHandle";
 
-export type PanelKind = "files" | "evidence" | "context" | "terminal" | "git";
+export type PanelKind = "files" | "evidence" | "context" | "terminal" | "git" | "memory";
 
 export type InspectorPage = {
   id: string;
@@ -26,6 +26,7 @@ const PANEL_OPTIONS: { kind: PanelKind; label: string; icon: typeof FileCode }[]
   { kind: "files", label: "文件", icon: FileCode },
   { kind: "git", label: "版本", icon: GitBranch },
   { kind: "evidence", label: "验收", icon: Check },
+  { kind: "memory", label: "记忆", icon: Bookmark },
   { kind: "context", label: "上下文", icon: Layers },
   { kind: "terminal", label: "终端", icon: TerminalSquare },
 ];

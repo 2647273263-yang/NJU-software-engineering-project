@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -45,12 +46,10 @@ def event_to_view(
         )
     if event.kind == "tool_started":
         name = str(payload.get("name", "tool"))
-        arguments = payload.get("arguments", {})
-        args_text = json.dumps(arguments, ensure_ascii=False)
         return TimelineItem(
             event.kind,
             _tool_title(name, payload, started=True),
-            args_text,
+            "进行中",
             "active",
             process=True,
             path=_changed_path(payload),
@@ -84,10 +83,7 @@ def event_to_view(
         if error == "timeout":
             arguments = payload.get("arguments")
             args = arguments if isinstance(arguments, dict) else {}
-            command = str(args.get("command") or "").strip().replace("\n", " ")
-            if len(command) > 40:
-                command = command[:37] + "…"
-            target = command or "这项操作"
+            target = _command_headline(str(args.get("command") or ""))
             return TimelineItem(
                 event.kind,
                 f"{target} 超时被停",
@@ -161,6 +157,8 @@ def event_to_view(
             for key in (
                 "system_tokens",
                 "project_tokens",
+                "user_rules_tokens",
+                "memory_tokens",
                 "summary_tokens",
                 "recent_tokens",
                 "tool_schema_tokens",
@@ -177,6 +175,27 @@ def event_to_view(
             context=context,
             process=True,
         )
+    if event.kind == "memory_extracted":
+        added = int(payload.get("added") or 0)
+        return TimelineItem(
+            event.kind,
+            f"记下了 {added} 条记忆" if added else "这轮没有新的跨会话记忆",
+            (
+                "请到检查器「记忆」页确认。确认后的条目会在下次新会话自动带上。"
+                if added
+                else "抽取器认为没有值得跨会话保存的个人偏好、开发规范或踩过的坑。"
+            ),
+            "info",
+            process=True,
+        )
+    if event.kind == "memory_extract_failed":
+        return TimelineItem(
+            event.kind,
+            "记忆抽取没成功",
+            "本轮对话结束后没能更新记忆文件。不影响这次改代码的结果。",
+            "warning",
+            process=True,
+        )
     if event.kind == "hypothesis_updated":
         retired = bool(payload.get("retired"))
         return TimelineItem(
@@ -188,10 +207,18 @@ def event_to_view(
         )
     if event.kind == "automatic_verification_started":
         commands = payload.get("commands", [])
+        labels = [
+            _command_headline(str(command))
+            for command in commands
+            if str(command).strip()
+        ]
+        detail = f"将运行 {labels[0]}" if len(labels) == 1 else (
+            f"将运行 {len(labels)} 项检查" if labels else "将按项目建议运行检查"
+        )
         return TimelineItem(
             event.kind,
             "系统自动验证",
-            json.dumps(commands, ensure_ascii=False),
+            detail,
             "info",
             process=True,
         )
@@ -234,15 +261,16 @@ def event_to_view(
         if payload.get("kind") == "plan":
             return TimelineItem(
                 event.kind,
-                "是否按此方案执行？",
-                str(payload.get("reason") or "方案已在对话中给出。确认后才会改代码。"),
+                "等待你确认方案",
+                "方案已在对话中给出。点「执行」才改代码。",
                 "warning",
                 process=True,
             )
+        tool = str(payload.get("tool", "工具"))
         return TimelineItem(
             event.kind,
-            f"需要审批：{payload.get('tool', '工具')}",
-            str(payload.get("reason", "")),
+            _approval_title(tool, payload),
+            _approval_reason_zh(str(payload.get("reason") or ""), tool),
             "warning",
             process=True,
         )
@@ -266,15 +294,74 @@ def event_to_view(
     )
 
 
+def _command_headline(command: str) -> str:
+    """Turn a shell snippet into a short label, without dumping script bodies."""
+
+    text = " ".join(command.strip().split())
+    if not text:
+        return "命令"
+    lower = text.lower()
+    if re.search(r"%[a-z]\.py\b", lower) or (
+        re.search(r"\bfor\s+%[a-z]\b", lower) and "python" in lower
+    ):
+        return "工作区脚本"
+    if re.search(r"(?:^|[;&|]\s*)(?:python(?:3)?|py)(?:\s+-\w+)*\s+-c\b", lower):
+        return "Python 代码"
+    if re.search(r"(?:^|[;&|]\s*)node\s+-e\b", lower):
+        return "Node 代码"
+    if re.search(r"powershell.*-(?:command|c)\b", lower) or re.search(
+        r"(?:^|[;&|]\s*)pwsh(?:\.exe)?\s+-c\b", lower
+    ):
+        return "PowerShell 脚本"
+    file_match = re.search(
+        r"(?:python(?:3)?|py)\s+(?:-[XB]\s+)*(?!-m\b)([^\s]+\.py)\b",
+        text,
+        re.I,
+    )
+    if file_match:
+        return Path(file_match.group(1).replace("\\", "/")).name
+    if len(text) <= 48:
+        return text
+    return text[:45] + "…"
+
+
+def _approval_title(tool: str, payload: dict[str, Any]) -> str:
+    if tool in {"write_file", "replace_in_file", "delete_file"}:
+        return "等待你允许写入文件"
+    arguments = payload.get("arguments")
+    args = arguments if isinstance(arguments, dict) else {}
+    if tool == "run_command":
+        return f"等待你批准：运行 {_command_headline(str(args.get('command') or ''))}"
+    if tool == "verify_changes":
+        return "等待你批准：运行验证"
+    return "等待你批准这次操作"
+
+
+def _approval_reason_zh(reason: str, tool: str) -> str:
+    mapped = {
+        "workspace content modification": "将改写工作区里的文件。允许后，本轮再写、改、删文件都不再询问。",
+        "commands can cause side effects": "这条命令可能改文件或产生其它影响，需要你点头后才会执行。",
+        "installing dependencies can change the workspace": "安装依赖会改动工作区，需要你点头后才会执行。",
+        "network commands can cause side effects": "这条命令会访问网络，需要你点头后才会执行。",
+    }
+    if reason in mapped:
+        return mapped[reason]
+    if tool in {"write_file", "replace_in_file", "delete_file"}:
+        return "将改写工作区里的文件。允许后，本轮再写、改、删文件都不再询问。"
+    if reason.strip():
+        return reason
+    return "需要你确认后才会继续。"
+
+
 def _tool_title(name: str, payload: dict[str, Any], *, started: bool, ok: bool = True) -> str:
     arguments = payload.get("arguments")
     args = arguments if isinstance(arguments, dict) else {}
     path = str(args.get("path") or _changed_path(payload) or "").replace("\\", "/")
     short = Path(path).name if path else ""
-    command = str(args.get("command") or "").strip().replace("\n", " ")
-    if len(command) > 48:
-        command = command[:45] + "…"
+    command = _command_headline(str(args.get("command") or ""))
     query = str(args.get("query") or args.get("pattern") or "").strip()
+    if len(query) > 24:
+        query = query[:21] + "…"
     labels = {
         "read_file": f"读取 {short}" if short else "读取文件",
         "write_file": f"写入 {short}" if short else "写入文件",
@@ -282,8 +369,8 @@ def _tool_title(name: str, payload: dict[str, Any], *, started: bool, ok: bool =
         "replace_in_file": f"修改 {short}" if short else "修改文件",
         "list_files": "列出文件",
         "search_text": f"搜索 {query}" if query else "搜索代码",
-        "run_command": f"运行 {command}" if command else "运行命令",
-        "verify_changes": f"验证 {command}" if command else "运行验证",
+        "run_command": f"运行 {command}" if command != "命令" else "运行命令",
+        "verify_changes": f"验证 {command}" if command != "命令" else "运行验证",
         "git_status": "查看 Git 状态",
         "git_diff": "查看 Git 差异",
         "undo_last_edit": "撤销编辑",

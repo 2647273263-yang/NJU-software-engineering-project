@@ -21,7 +21,7 @@ error handling, persistence, and evidence-based completion are implemented in th
 - Plan mode that advertises only read-only tools and can continue in Build mode after approval.
 - Explainable command risk classification and interactive approval, including session-scoped
   remembered approvals.
-- Four-layer context: stable instructions, project context, compacted memory, and recent verbatim
+- Four-layer context: stable instructions, optional user rules, project context, compacted memory, and recent verbatim
   history.
 - Deterministic token estimation and structured context compaction.
 - SQLite WAL storage for messages, events, compactions, edit transactions, claims, and evidence.

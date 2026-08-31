@@ -25,12 +25,11 @@ class FakeModel:
         timeout_s: float,
     ) -> ModelResponse:
         del timeout_s
+        if len(self.calls) >= len(self._steps):
+            raise RuntimeError("FakeModel has no scripted response for this call")
         self.calls.append(deepcopy(messages))
         self.tool_schemas.append(deepcopy(tools))
-        index = len(self.calls) - 1
-        if index >= len(self._steps):
-            raise RuntimeError("FakeModel has no scripted response for this call")
-        step = self._steps[index]
+        step = self._steps[len(self.calls) - 1]
         if isinstance(step, Exception):
             raise step
         if callable(step):

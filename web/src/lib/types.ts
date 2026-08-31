@@ -62,6 +62,7 @@ export type RunSettings = {
   max_cost: string;
   auto_approve: boolean;
   demo: boolean;
+  extra_rules: string;
 };
 
 export type SessionDetail = {
@@ -93,6 +94,7 @@ export function defaultSettings(defaults: Partial<RunSettings> = {}): RunSetting
     max_cost: "",
     auto_approve: false,
     demo: false,
+    extra_rules: "",
     ...defaults,
   };
 }

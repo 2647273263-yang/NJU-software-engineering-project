@@ -158,10 +158,55 @@ async def test_session_service_persists_messages_and_result(tmp_path: Path) -> N
             "user",
             "assistant",
         ]
-        assert storage.list_events(session_id)[-1].kind == "workspace_summary"
         assert any(
             event.kind == "run_finished" for event in storage.list_events(session_id)
         )
+        assert any(
+            event.kind == "workspace_summary" for event in storage.list_events(session_id)
+        )
+
+
+@pytest.mark.asyncio
+async def test_session_service_extracts_memories_after_success(tmp_path: Path) -> None:
+    from forge_agent.context.memory import load_memories
+
+    model = FakeModel(
+        [
+            ModelResponse(text="Analysis complete."),
+            ModelResponse(
+                text=(
+                    '[{"kind":"convention","text":"Prefer pytest over unittest.",'
+                    '"tags":["pytest"],"evidence":"user"}]'
+                )
+            ),
+        ]
+    )
+    service = SessionService(
+        tmp_path / "state.sqlite3",
+        model_factory=lambda _config: model,
+    )
+    result = await service.run_new(config(tmp_path), "Please use pytest for tests.")
+    assert result.status is AgentStatus.COMPLETED
+    items = load_memories(tmp_path)
+    assert len(items) == 1
+    assert items[0].kind == "convention"
+    assert items[0].status == "proposed"
+    assert "pytest" in items[0].text.lower()
+    with SQLiteStorage(tmp_path / "state.sqlite3") as storage:
+        session_id = storage.connection.execute("SELECT id FROM sessions").fetchone()["id"]
+        assert any(
+            event.kind == "memory_extracted" for event in storage.list_events(session_id)
+        )
+
+    later = FakeModel([ModelResponse(text="Still on it.")])
+    again = SessionService(
+        tmp_path / "later.sqlite3",
+        model_factory=lambda _config: later,
+    )
+    await again.run_new(config(tmp_path), "fix failing pytest")
+    injected = " ".join(message.content or "" for message in later.calls[0])
+    assert "[retrieved memory]" in injected
+    assert "Prefer pytest" in injected
 
 
 class SlowModel:

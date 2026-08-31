@@ -527,6 +527,7 @@ def session_settings_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "max_steps": int(metadata.get("max_steps") or 30),
         "max_tokens": int(metadata.get("max_tokens") or 1_000_000),
         "max_cost": "" if max_cost in {None, ""} else str(max_cost),
+        "extra_rules": str(metadata.get("extra_rules") or ""),
         "auto_approve": bool(metadata.get("auto_approve", False)),
         "demo": bool(metadata.get("demo", False)),
     }
@@ -552,6 +553,8 @@ def apply_session_settings(metadata: dict[str, Any], values: dict[str, Any]) -> 
         updated["max_tokens"] = values["max_tokens"]
     if "max_cost" in values:
         updated["max_cost"] = values["max_cost"]
+    if "extra_rules" in values and values["extra_rules"] is not None:
+        updated["extra_rules"] = str(values["extra_rules"])
     if "auto_approve" in values:
         updated["auto_approve"] = values["auto_approve"]
     if "demo" in values:

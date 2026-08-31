@@ -171,6 +171,51 @@ async def test_requires_verification_after_edit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_successful_python_script_run_counts_as_verification(tmp_path: Path) -> None:
+    model = FakeModel(
+        [
+            ModelResponse(tool_calls=[ToolCall(id="1", name="fake")]),
+            ModelResponse(
+                tool_calls=[
+                    ToolCall(id="2", name="run_command", arguments={"command": "python app.py"})
+                ]
+            ),
+            ModelResponse(text="Verified by running app.py"),
+        ]
+    )
+    tools = FakeTools(
+        [
+            ToolResult(
+                ok=True,
+                summary="edited",
+                metadata={"changed_files": ["app.py"]},
+            ),
+            ToolResult(
+                ok=True,
+                summary="exited 0",
+                metadata={"command": "python app.py", "exit_code": 0},
+            ),
+        ]
+    )
+    events: list[tuple[str, dict]] = []
+
+    result = await AgentLoop(
+        config=config(tmp_path),
+        model=model,
+        tools=tools,
+        on_event=lambda kind, payload: events.append((kind, payload)),
+    ).run("fix")
+
+    assert result.status is AgentStatus.COMPLETED
+    assert result.verification is not None
+    assert result.verification.passed
+    assert result.verification.command == "python app.py"
+    assert len(model.calls) == 3
+    assert len(tools.calls) == 2
+    assert not any(kind == "automatic_verification_started" for kind, _ in events)
+
+
+@pytest.mark.asyncio
 async def test_analysis_does_not_verify_historical_edits(tmp_path: Path) -> None:
     events: list[tuple[str, dict]] = []
     tools = FakeTools([])

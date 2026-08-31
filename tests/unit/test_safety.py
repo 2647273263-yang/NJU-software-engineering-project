@@ -82,6 +82,16 @@ def test_policy_allows_tests_and_verify_without_approval() -> None:
     assert not verify_default.requires_approval
 
 
+def test_python_script_and_cmd_for_loop_count_as_verification_commands() -> None:
+    from forge_agent.safety.policy import is_verification_command
+
+    assert is_verification_command("python app.py")
+    assert is_verification_command("python -m pytest -q")
+    assert is_verification_command(r"for %f in (*.py) do python %f")
+    assert not is_verification_command("pip install requests")
+    assert not is_verification_command("python -c \"print(1)\"")
+
+
 def test_policy_flags_direct_git_metadata_write() -> None:
     decision = PolicyEngine(auto_approve=True).evaluate(
         "write_file", {"path": ".git/config"}

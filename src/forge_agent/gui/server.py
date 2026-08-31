@@ -22,6 +22,14 @@ from starlette.types import ASGIApp
 
 from forge_agent.application import ApplicationEvent, EventBus, SessionService
 from forge_agent.config import RunConfig
+from forge_agent.context.memory import (
+    accept_all_proposed,
+    delete_memory,
+    load_memories,
+    memory_auto_extract,
+    set_memory_auto_extract,
+    update_memory,
+)
 from forge_agent.gui.shell import LiveTerminal, get_terminal, run_terminal_command
 from forge_agent.gui.viewmodels import event_to_view, view_to_dict
 from forge_agent.gui.session_bundle import (
@@ -91,6 +99,7 @@ class StartRunBody(BaseModel):
     max_steps: int = Field(default=30, ge=1, le=100)
     max_tokens: int = Field(default=1_000_000, ge=1_000)
     max_cost: float | None = Field(default=None, gt=0)
+    extra_rules: str = ""
     auto_approve: bool = False
     demo: bool = False
     images: list[str] = Field(default_factory=list)
@@ -105,6 +114,7 @@ class ResumeBody(BaseModel):
     max_steps: int = Field(default=30, ge=1, le=100)
     max_tokens: int = Field(default=1_000_000, ge=1_000)
     max_cost: float | None = Field(default=None, gt=0)
+    extra_rules: str = ""
     auto_approve: bool = False
     demo: bool = False
     images: list[str] = Field(default_factory=list)
@@ -121,6 +131,7 @@ class SessionSettingsBody(BaseModel):
     max_steps: int | None = Field(default=None, ge=1, le=100)
     max_tokens: int | None = Field(default=None, ge=1_000)
     max_cost: float | None = None
+    extra_rules: str | None = None
     auto_approve: bool | None = None
     demo: bool | None = None
     title: str = ""
@@ -193,6 +204,19 @@ class GitRemoteBody(BaseModel):
     url: str = Field(min_length=1)
 
 
+class MemorySettingsBody(BaseModel):
+    workspace: str
+    auto_extract: bool | None = None
+    accept_all: bool = False
+
+
+class MemoryUpdateBody(BaseModel):
+    workspace: str
+    status: str | None = None
+    text: str | None = None
+    tags: list[str] | None = None
+
+
 class ApprovalBody(BaseModel):
     approved: bool
     remember_for_session: bool = False
@@ -242,6 +266,7 @@ def build_run_config(
     max_steps: int,
     max_tokens: int,
     max_cost: float | None,
+    extra_rules: str = "",
     auto_approve: bool,
     images: list[str] | None = None,
 ) -> RunConfig:
@@ -261,6 +286,7 @@ def build_run_config(
         max_steps=max_steps,
         max_total_tokens=max_tokens,
         max_cost_usd=max_cost,
+        extra_rules=extra_rules.strip() or None,
         input_cost_per_million=float(os.environ.get("FORGE_INPUT_COST_PER_MILLION", "0")),
         output_cost_per_million=float(os.environ.get("FORGE_OUTPUT_COST_PER_MILLION", "0")),
         stream_model=True,
@@ -395,6 +421,7 @@ def persist_gui_settings(database_path: Path, session_id: str, values: dict[str,
                 "max_steps",
                 "max_tokens",
                 "max_cost",
+                "extra_rules",
                 "auto_approve",
                 "demo",
                 "task",
@@ -573,6 +600,7 @@ def create_app(
                 max_steps=body.max_steps,
                 max_tokens=body.max_tokens,
                 max_cost=body.max_cost,
+                extra_rules=body.extra_rules,
                 auto_approve=body.auto_approve,
                 images=body.images,
             )
@@ -589,6 +617,7 @@ def create_app(
                 "max_steps": body.max_steps,
                 "max_tokens": body.max_tokens,
                 "max_cost": body.max_cost,
+                "extra_rules": body.extra_rules,
                 "auto_approve": body.auto_approve,
                 "demo": body.demo,
             },
@@ -619,6 +648,7 @@ def create_app(
                 max_steps=body.max_steps,
                 max_tokens=body.max_tokens,
                 max_cost=body.max_cost,
+                extra_rules=body.extra_rules,
                 auto_approve=body.auto_approve,
                 images=body.images,
             )
@@ -637,6 +667,7 @@ def create_app(
                 "max_steps": body.max_steps,
                 "max_tokens": body.max_tokens,
                 "max_cost": body.max_cost,
+                "extra_rules": body.extra_rules,
                 "auto_approve": body.auto_approve,
                 "demo": body.demo,
             },
@@ -771,6 +802,58 @@ def create_app(
             return {"tree": workspace_tree(Path(workspace))}
         except (ValueError, OSError) as exc:
             raise _error(400, str(exc)) from exc
+
+    @app.get("/api/workspace/memory")
+    def get_memory(workspace: str, demo: bool = False) -> dict[str, Any]:
+        root = Path(workspace)
+        if not root.is_dir():
+            raise _error(400, "workspace is not a directory")
+        redact_root = root if demo else None
+        items = [
+            redact_data(item.to_dict(), workspace=redact_root)
+            for item in load_memories(root)
+        ]
+        return {"auto_extract": memory_auto_extract(root), "items": items}
+
+    @app.patch("/api/workspace/memory")
+    def patch_memory_settings(body: MemorySettingsBody) -> dict[str, Any]:
+        root = Path(body.workspace)
+        if not root.is_dir():
+            raise _error(400, "workspace is not a directory")
+        if body.auto_extract is not None:
+            set_memory_auto_extract(root, body.auto_extract)
+        accepted = accept_all_proposed(root) if body.accept_all else 0
+        return {
+            "auto_extract": memory_auto_extract(root),
+            "accepted": accepted,
+            "items": [item.to_dict() for item in load_memories(root)],
+        }
+
+    @app.patch("/api/workspace/memory/{memory_id}")
+    def patch_memory_item(memory_id: str, body: MemoryUpdateBody) -> dict[str, Any]:
+        root = Path(body.workspace)
+        if not root.is_dir():
+            raise _error(400, "workspace is not a directory")
+        fields: dict[str, Any] = {}
+        if body.status is not None:
+            fields["status"] = body.status
+        if body.text is not None:
+            fields["text"] = body.text
+        if body.tags is not None:
+            fields["tags"] = body.tags
+        item = update_memory(root, memory_id, **fields)
+        if item is None:
+            raise _error(404, "unknown memory")
+        return {"item": item.to_dict()}
+
+    @app.delete("/api/workspace/memory/{memory_id}")
+    def remove_memory_item(memory_id: str, workspace: str) -> dict[str, bool]:
+        root = Path(workspace)
+        if not root.is_dir():
+            raise _error(400, "workspace is not a directory")
+        if not delete_memory(root, memory_id):
+            raise _error(404, "unknown memory")
+        return {"deleted": True}
 
     @app.get("/api/workspace/file")
     def get_file(workspace: str, path: str, session_id: str = "") -> dict[str, Any]:

@@ -24,6 +24,8 @@ class RuntimeContext:
         budget: ContextBudget,
         model: ModelClient,
         project_context: str | None = None,
+        user_rules: str | None = None,
+        retrieved_memory: str | None = None,
         max_tool_output_chars: int = 20_000,
         preserve_recent: int = 8,
         initial_summary: CompactionSummary | None = None,
@@ -33,6 +35,8 @@ class RuntimeContext:
         self.budget = budget
         self.model = model
         self.project_context = project_context
+        self.user_rules = user_rules
+        self.retrieved_memory = retrieved_memory
         self.max_tool_output_chars = max_tool_output_chars
         self.preserve_recent = preserve_recent
         self.on_event = on_event or (lambda _event, _payload: None)
@@ -94,19 +98,30 @@ class RuntimeContext:
                 },
             )
         prepared = [*fixed, *active]
-        project_messages = fixed[1:2] if self.project_context else []
-        summary_index = 2 if self.project_context else 1
-        summary_messages = (
-            fixed[summary_index : summary_index + 1]
-            if self.summary is not None
-            else []
-        )
+        cursor = 1
+        project_messages: list[Message] = []
+        if self.project_context:
+            project_messages = fixed[cursor : cursor + 1]
+            cursor += 1
+        rules_messages: list[Message] = []
+        if self.user_rules:
+            rules_messages = fixed[cursor : cursor + 1]
+            cursor += 1
+        memory_messages: list[Message] = []
+        if self.retrieved_memory:
+            memory_messages = fixed[cursor : cursor + 1]
+            cursor += 1
+        summary_messages: list[Message] = []
+        if self.summary is not None:
+            summary_messages = fixed[cursor : cursor + 1]
         self.on_event(
             "context_prepared",
             {
                 "estimated": True,
                 "system_tokens": self.budget.estimate_messages([system]),
                 "project_tokens": self.budget.estimate_messages(project_messages),
+                "user_rules_tokens": self.budget.estimate_messages(rules_messages),
+                "memory_tokens": self.budget.estimate_messages(memory_messages),
                 "summary_tokens": self.budget.estimate_messages(summary_messages),
                 "recent_tokens": self.budget.estimate_messages(active),
                 "tool_schema_tokens": tool_tokens,
@@ -124,6 +139,10 @@ class RuntimeContext:
             fixed.append(
                 Message(role="system", content=f"[project context]\n{self.project_context}")
             )
+        if self.user_rules:
+            fixed.append(Message(role="system", content=self.user_rules))
+        if self.retrieved_memory:
+            fixed.append(Message(role="system", content=self.retrieved_memory))
         if self.summary is not None:
             fixed.append(
                 Message(

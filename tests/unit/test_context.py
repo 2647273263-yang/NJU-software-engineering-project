@@ -150,3 +150,27 @@ async def test_runtime_context_compacts_and_keeps_recent_messages() -> None:
     assert "historical context" in (prepared[1].content or "")
     assert prepared[-2:] == messages[-2:]
     assert events[0][0] == "context_compacted"
+
+
+@pytest.mark.asyncio
+async def test_runtime_context_injects_user_rules_before_recent_messages() -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+    runtime = RuntimeContext(
+        budget=ContextBudget(context_window=8_000, reserved_output_tokens=1_000),
+        model=FakeModel([]),
+        user_rules="[user rules]\nPrefer pytest.",
+        on_event=lambda kind, payload: events.append((kind, payload)),
+    )
+    messages = [
+        Message(role="system", content="core rules"),
+        Message(role="user", content="run tests"),
+    ]
+
+    prepared = await runtime.prepare(messages, [])
+
+    assert prepared[0].content == "core rules"
+    assert prepared[1].content is not None
+    assert prepared[1].content.startswith("[user rules]")
+    assert prepared[2].content == "run tests"
+    prepared_event = next(payload for kind, payload in events if kind == "context_prepared")
+    assert int(prepared_event["user_rules_tokens"]) > 0

@@ -29,6 +29,26 @@ class PolicyDecision(BaseModel):
     reason: str
 
 
+def is_verification_command(command: str) -> bool:
+    """True when a shell command is being used to check the latest edits."""
+
+    text = command.strip()
+    if not text:
+        return False
+    if PolicyEngine._TEST_COMMAND.search(text):
+        return True
+    if re.search(r"(?i)\bfor\s+%[a-z]\b", text) and re.search(
+        r"(?i)\b(?:python(?:3)?|py)\b", text
+    ):
+        return True
+    return bool(
+        re.search(
+            r"(?i)(?:^|[;&|\n]\s*)(?:python(?:3)?|py)(?:\s+-\w+)*\s+\S+\.py\b",
+            text,
+        )
+    )
+
+
 class PolicyEngine:
     _READ_ONLY = READ_ONLY_TOOLS
     _MUTATING = frozenset(

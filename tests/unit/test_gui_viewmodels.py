@@ -93,9 +93,66 @@ def test_demo_view_redacts_workspace_and_secret() -> None:
         workspace=workspace,
     )
 
-    assert "Example" not in view.detail
+    assert "Example" not in view.title
+    assert "abcdefghijklmnopqrstuvwxyz" not in view.title
     assert "abcdefghijklmnopqrstuvwxyz" not in view.detail
-    assert "$WORKSPACE" in view.detail
+    assert "$WORKSPACE" in view.title or "[REDACTED_KEY]" in view.title
+    assert view.detail == "进行中"
+
+
+def test_run_command_titles_do_not_dump_script_bodies() -> None:
+    started = event_to_view(
+        event(
+            "tool_started",
+            {
+                "name": "run_command",
+                "arguments": {
+                    "command": 'python -c "print(open(\'app.py\').read()); x = 1\\n" * 40'
+                },
+            },
+        )
+    )
+    assert started.title == "运行 Python 代码"
+    assert "print(" not in started.title
+    assert "{" not in started.detail
+    looped = event_to_view(
+        event(
+            "tool_started",
+            {
+                "name": "run_command",
+                "arguments": {"command": r"for %f in (*.py) do python %f"},
+            },
+        )
+    )
+    assert looped.title == "运行 工作区脚本"
+
+
+def test_approval_requested_is_plain_chinese() -> None:
+    write = event_to_view(
+        event(
+            "approval_requested",
+            {
+                "tool": "write_file",
+                "arguments": {"path": "app.py", "content": "print(1)\\n" * 20},
+                "reason": "workspace content modification",
+            },
+        )
+    )
+    command = event_to_view(
+        event(
+            "approval_requested",
+            {
+                "tool": "run_command",
+                "arguments": {"command": "pip install requests"},
+                "reason": "installing dependencies can change the workspace",
+            },
+        )
+    )
+    assert write.title == "等待你允许写入文件"
+    assert "print" not in write.detail
+    assert command.title.startswith("等待你批准")
+    assert "pip install" in command.title
+    assert "改动工作区" in command.detail
 
 
 def test_context_compaction_populates_dashboard_data() -> None:
@@ -252,8 +309,8 @@ def test_plan_approval_events_use_chinese_titles() -> None:
     ready = event_to_view(event("plan_ready", {"plan": "a plan"}))
     approved = event_to_view(event("plan_approved", {"mode": "build"}))
 
-    assert requested.title == "是否按此方案执行？"
-    assert "确认后才会改代码" in requested.detail or "Confirm" in requested.detail
+    assert requested.title == "等待你确认方案"
+    assert "才改代码" in requested.detail
     assert ready.title.startswith("方案已提出")
     assert approved.title.startswith("已确认")
 

@@ -6,6 +6,7 @@ from forge_agent.safety.policy import (
     PolicyDecision,
     PolicyEngine,
     RiskLevel,
+    is_verification_command,
 )
 from forge_agent.safety.runtime import PolicyToolRuntime
 
@@ -16,4 +17,5 @@ __all__ = [
     "PolicyEngine",
     "PolicyToolRuntime",
     "RiskLevel",
+    "is_verification_command",
 ]

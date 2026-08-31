@@ -425,3 +425,67 @@ def test_gui_can_change_idle_session_workspace(tmp_path: Path) -> None:
         )
         assert failed.status_code == 400
 
+
+def test_gui_persists_extra_rules_in_session_settings(tmp_path: Path) -> None:
+    from forge_agent.storage import SQLiteStorage
+
+    database = tmp_path / "sessions.sqlite3"
+    with SQLiteStorage(database) as storage:
+        storage.create_session(
+            "sess-rules",
+            {"task": "demo", "workspace": str(tmp_path), "mode": "build"},
+        )
+    app = create_app(database_path=database)
+    with TestClient(app) as client:
+        saved = client.patch(
+            "/api/sessions/sess-rules/settings",
+            json={"extra_rules": "Prefer pytest."},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["settings"]["extra_rules"] == "Prefer pytest."
+        reloaded = client.get("/api/sessions/sess-rules").json()
+        assert reloaded["settings"]["extra_rules"] == "Prefer pytest."
+
+
+def test_gui_memory_store_accept_and_delete(tmp_path: Path) -> None:
+    from forge_agent.context.memory import MemoryItem, append_memories
+
+    append_memories(
+        tmp_path,
+        [
+            MemoryItem(
+                id="mem-1",
+                created_at="2026-08-31T00:00:00+00:00",
+                kind="preference",
+                text="Reply in Chinese.",
+                tags=["language"],
+                evidence="s",
+                status="proposed",
+            )
+        ],
+    )
+    app = create_app(database_path=tmp_path / "sessions.sqlite3")
+    with TestClient(app) as client:
+        listed = client.get("/api/workspace/memory", params={"workspace": str(tmp_path)})
+        assert listed.status_code == 200
+        assert listed.json()["auto_extract"] is True
+        assert listed.json()["items"][0]["text"] == "Reply in Chinese."
+        accepted = client.patch(
+            "/api/workspace/memory/mem-1",
+            json={"workspace": str(tmp_path), "status": "accepted"},
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["item"]["status"] == "accepted"
+        toggled = client.patch(
+            "/api/workspace/memory",
+            json={"workspace": str(tmp_path), "auto_extract": False},
+        )
+        assert toggled.json()["auto_extract"] is False
+        deleted = client.delete(
+            "/api/workspace/memory/mem-1",
+            params={"workspace": str(tmp_path)},
+        )
+        assert deleted.json()["deleted"] is True
+        empty = client.get("/api/workspace/memory", params={"workspace": str(tmp_path)})
+        assert empty.json()["items"] == []
+

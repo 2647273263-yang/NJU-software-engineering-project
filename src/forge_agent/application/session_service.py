@@ -22,7 +22,12 @@ from forge_agent.context import (
     ContextBudget,
     RuntimeContext,
     discover_project_context,
+    extract_run_memories,
+    load_user_rules,
+    render_retrieved_memory,
+    retrieve_memories,
 )
+from forge_agent.context.memory import memory_auto_extract
 from forge_agent.model import ModelClient, OpenAICompatibleClient
 from forge_agent.safety import PolicyDecision, PolicyEngine, PolicyToolRuntime, RiskLevel
 from forge_agent.storage import SQLiteStorage
@@ -72,6 +77,7 @@ class SessionService:
             "model": config.model,
             "mode": config.mode.value,
             "verify_command": config.verify_command,
+            "extra_rules": config.extra_rules or "",
             "status": AgentStatus.INITIALIZING.value,
         }
         with SQLiteStorage(self.database_path) as storage:
@@ -313,6 +319,9 @@ class SessionService:
             initial_summary, compacted_through = self._restore_compaction(
                 storage, session_id
             )
+            retrieved = render_retrieved_memory(
+                retrieve_memories(config.workspace, task=task, project=discovered)
+            )
             context = RuntimeContext(
                 budget=ContextBudget(
                     context_window=config.context_window,
@@ -320,6 +329,8 @@ class SessionService:
                 ),
                 model=model,
                 project_context=discovered.render(config.verify_command),
+                user_rules=load_user_rules(config.workspace, config.extra_rules),
+                retrieved_memory=retrieved,
                 max_tool_output_chars=config.max_tool_output_chars,
                 initial_summary=initial_summary,
                 compacted_through=compacted_through,
@@ -378,6 +389,16 @@ class SessionService:
                 status=result.status.value,
             )
             self.approvals.clear_session(session_id)
+            if result.status is AgentStatus.COMPLETED:
+                await self._extract_memories(
+                    config=config,
+                    session_id=session_id,
+                    task=task,
+                    result=result,
+                    loop=loop,
+                    model=model,
+                    on_event=on_event,
+                )
             return result
 
     @staticmethod
@@ -417,6 +438,61 @@ class SessionService:
         }
         on_event("workspace_summary", payload)
         return result.model_copy(update={"workspace_summary": payload})
+
+    @staticmethod
+    async def _extract_memories(
+        *,
+        config: RunConfig,
+        session_id: str,
+        task: str,
+        result: RunResult,
+        loop: AgentLoop,
+        model: ModelClient,
+        on_event: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        if not memory_auto_extract(config.workspace):
+            return
+        evidence_lines = [
+            f"{claim.statement}: "
+            + "; ".join(item.description for item in claim.evidence[:3])
+            for claim in EvidenceLedger.from_run_result(result).claims
+        ]
+        stream = getattr(model, "_stream", None)
+        delta = getattr(model, "_on_delta", None)
+        if stream is not None:
+            model._stream = False
+        if hasattr(model, "set_delta_callback"):
+            model.set_delta_callback(lambda _delta: None)
+        try:
+            added = await extract_run_memories(
+                workspace=config.workspace,
+                model=model,
+                task=task,
+                messages=list(loop.messages),
+                result_summary=result.summary,
+                summary=getattr(loop.context, "summary", None),
+                evidence_lines=evidence_lines,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            on_event(
+                "memory_extract_failed",
+                {"error": str(exc)[:300]},
+            )
+            return
+        finally:
+            if stream is not None:
+                model._stream = stream
+            if hasattr(model, "set_delta_callback") and delta is not None:
+                model.set_delta_callback(delta)
+        on_event(
+            "memory_extracted",
+            {
+                "added": len(added),
+                "ids": [item.id for item in added],
+                "kinds": [item.kind for item in added],
+            },
+        )
 
     @staticmethod
     def _default_model(config: RunConfig) -> ModelClient:

@@ -2266,7 +2266,7 @@ export default function App() {
                 value={settings.extra_rules}
                 onChange={(event) => setSettings({ ...settings, extra_rules: event.target.value })}
                 rows={4}
-                placeholder="本会话优先；留空则读工作区 .forge/rules.md。不能用来授权出沙箱或 git push。"
+                placeholder="本会话优先；留空则读工作区 .forge/rules.md。"
                 className="mt-1 w-full resize-none rounded-md bg-white/[0.04] px-2 py-1.5 text-[13px] outline-none"
               />
             </label>

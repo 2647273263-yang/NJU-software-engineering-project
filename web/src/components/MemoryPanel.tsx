@@ -95,7 +95,7 @@ export function MemoryPanel({
       <div className="mb-3 space-y-1">
         <h2 className="text-[13px] font-medium">跨会话记忆</h2>
         <p className="text-[12px] leading-5 text-muted-foreground">
-          每轮正常结束后，会抽出个人偏好、开发规范和踩过的坑，写入工作区 .forge/memory.jsonl，不进更改横栏。不记录仓库里有哪些文件或默认算法。下次新会话只注入相关条目。待确认的规范/踩坑会先带上，偏好需你点接受。
+          每次对话之后，Agent 会自己识别哪些信息是跨会话有价值的（比如透露的个人偏好、项目的开发规范、踩过的坑），把它们整理到这个记忆文件里，下次新会话启动时，再把相关的记忆自动注入到上下文开头。
         </p>
       </div>
       <label className="mb-3 flex items-center gap-2 text-[12.5px]">

@@ -173,7 +173,7 @@ export function EvidencePanel({ claims }: { claims: ClaimRow[] }) {
       <div className="mb-3 space-y-1">
         <h2 className="text-[13px] font-medium">本轮验收</h2>
         <p className="text-[12px] leading-5 text-muted-foreground">
-          用来核对 Agent 这一轮实际做了什么：改了哪些文件、有没有跑测试或检查、过没过。复杂任务结束前还会多一层评判器对照原话验收。可以据此决定要不要接受改动，或让它再试一次。存档、分支和恢复请用「版本」。
+          用来核对 Agent 这一轮实际做了什么：改了哪些文件、有没有跑测试或检查、过没过。复杂任务结束前还会多一层评判器对照原话验收。
         </p>
       </div>
       {visible.length === 0 ? (

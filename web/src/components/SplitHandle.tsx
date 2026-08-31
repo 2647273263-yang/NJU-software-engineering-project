@@ -45,7 +45,7 @@ export function SplitHandle({
       {onSwap ? (
         <button
           type="button"
-          className="absolute top-1/2 left-1/2 z-20 hidden -translate-x-1/2 -translate-y-1/2 rounded border border-white/10 bg-[#1a1a1a]/90 p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
+          className="absolute top-1/2 left-1/2 z-20 hidden -translate-x-1/2 -translate-y-1/2 rounded-sm bg-popover/90 p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
           title="对调对话区和检查器"
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => {

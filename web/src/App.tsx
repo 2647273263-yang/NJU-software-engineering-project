@@ -184,14 +184,14 @@ function ModeSelect({
     <div className="relative">
       <button
         type="button"
-        className="flex h-7 items-center gap-1 rounded-md border border-border bg-[#2a2a2a] px-2 text-[12px] text-[#ececec]"
+        className="flex h-7 items-center gap-1 rounded-md bg-white/[0.05] px-2 text-[12px] text-foreground transition-colors duration-150 hover:bg-white/[0.08]"
         onClick={() => setOpen((current) => !current)}
       >
         {value === "build" ? "Agent" : "Plan"}
         <ChevronDown className="h-3 w-3" />
       </button>
       {open ? (
-        <div className="absolute bottom-8 left-0 z-20 min-w-[88px] overflow-hidden rounded-md border border-border bg-[#1f1f1f] py-1">
+        <div className="absolute bottom-8 left-0 z-20 min-w-[88px] overflow-hidden rounded-md bg-popover py-1 ring-1 ring-white/[0.08]">
           {(
             [
               ["build", "Agent"],
@@ -202,8 +202,8 @@ function ModeSelect({
               key={mode}
               type="button"
               className={cn(
-                "block w-full px-3 py-1.5 text-left text-[12px] text-[#ececec] hover:bg-[#3a3a3a]",
-                value === mode && "bg-[#3d4d6b]",
+                "block w-full px-3 py-1.5 text-left text-[12px] text-foreground transition-colors duration-150 hover:bg-white/[0.06]",
+                value === mode && "bg-primary/15 text-primary",
               )}
               onClick={() => {
                 onChange(mode);
@@ -1314,8 +1314,8 @@ export default function App() {
   }
 
   const sidebar = (
-    <aside className="flex shrink-0 flex-col bg-[#0f0f0f]" style={{ width: layout.left }}>
-      <div className="flex h-9 items-center justify-between gap-1 px-1">
+    <aside className="flex shrink-0 flex-col bg-sidebar" style={{ width: layout.left }}>
+      <div className="flex h-10 items-center justify-between gap-1 px-1">
         <div className="flex min-w-0 items-center gap-1">
           <Button
             type="button"
@@ -1326,28 +1326,25 @@ export default function App() {
           >
             <PanelLeftClose className="h-4 w-4" />
           </Button>
-          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-primary/15 text-[11px] font-semibold text-primary">
-            F
-          </div>
-          <span className="truncate text-[12.5px] font-semibold">ForgeAgent</span>
+          <span className="truncate text-[12px] font-semibold tracking-[0.16em]">ForgeAgent</span>
         </div>
         <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="设置">
           <Settings className="h-4 w-4" />
         </Button>
       </div>
       <div className="flex gap-1 px-2 pb-2">
-        <Button variant="outline" className="min-w-0 flex-1 justify-start gap-2" onClick={() => void newChat()}>
+        <Button className="min-w-0 flex-1 justify-start gap-2" onClick={() => void newChat()}>
           <Plus className="h-3.5 w-3.5" />
           新会话
         </Button>
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           size="sm"
-          title="inport"
+          title="导入会话"
           onClick={() => importFileRef.current?.click()}
         >
-          inport
+          导入
         </Button>
         <input
           ref={importFileRef}
@@ -1369,17 +1366,23 @@ export default function App() {
             <div
               key={session.id}
               className={cn(
-                "group mb-0.5 flex items-start rounded-md hover:bg-white/5",
-                selectedId === session.id && "bg-primary/10",
+                "group relative mb-0.5 flex items-start rounded-sm transition-colors duration-150 hover:bg-white/[0.04]",
+                selectedId === session.id && "bg-white/[0.05]",
               )}
             >
+              <span
+                className={cn(
+                  "absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary transition-opacity duration-150",
+                  selectedId === session.id ? "opacity-100" : "opacity-0",
+                )}
+              />
               <button
                 type="button"
                 onClick={() => void loadSession(session.id)}
                 className="min-w-0 flex-1 px-2.5 py-2 text-left"
               >
                 <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
+                  <div className="min-w-0 flex-1 truncate text-[12px] text-foreground">
                     {session.task || "未命名任务"}
                   </div>
                   {sessionShowsSpinner(session, selectedId, running, status) ? (
@@ -1402,11 +1405,11 @@ export default function App() {
                   type="button"
                   size="sm"
                   variant="ghost"
-                  title="export"
+                  title="导出会话"
                   className="h-7 px-2 text-[11px]"
                   onClick={() => void exportSession(session.id)}
                 >
-                  export
+                  导出
                 </Button>
                 <Button
                   type="button"
@@ -1436,7 +1439,7 @@ export default function App() {
 
   const chatPane = (
     <main className="flex min-h-0 min-w-[280px] flex-1 flex-col">
-        <header className="flex h-9 items-center justify-between gap-2 border-b border-border px-3">
+        <header className="flex h-10 items-center justify-between gap-2 border-b border-white/[0.06] px-3">
           <div className="flex min-w-0 items-center gap-1">
             {layout.sessionHidden ? (
               <Button
@@ -1476,8 +1479,8 @@ export default function App() {
             </Button>
             <div
               className={cn(
-                "rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground",
-                running && "border-transparent bg-primary/15 text-primary",
+                "rounded-full px-2 py-0.5 text-[11px] tracking-wide text-muted-foreground",
+                running && "bg-primary/10 text-primary",
                 status === "completed" && "text-emerald-400",
                 (status === "failed" || status === "cancelled" || status === "stopped") && "text-red-400",
               )}
@@ -1488,7 +1491,7 @@ export default function App() {
         </header>
 
         {pendingChanges.length > 0 ? (
-          <div className="border-b border-border bg-[#161616]">
+          <div className="border-b border-white/[0.06] bg-primary/[0.04]">
             <div className="flex items-center gap-2 px-3 py-1.5">
               <button
                 type="button"
@@ -1522,7 +1525,7 @@ export default function App() {
                   <div key={file.path} className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-white/5">
                     <button
                       type="button"
-                      className="min-w-0 flex-1 truncate text-left text-[12.5px] text-primary"
+                      className="min-w-0 flex-1 truncate text-left text-[12.5px] text-foreground/90"
                       onClick={() => void openWorkspaceFile(file.path)}
                     >
                       {file.path}
@@ -1554,24 +1557,24 @@ export default function App() {
           <div className="mx-auto flex min-h-full max-w-[720px] flex-col px-4 py-6">
             {blocks.length === 0 ? (
               <div className="m-auto max-w-md text-center">
-                <h1 className="text-xl font-medium tracking-tight">准备开始</h1>
-                <p className="mt-2 text-sm text-muted-foreground">
+                <h1 className="text-[22px] font-medium tracking-[0.14em]">准备开始</h1>
+                <p className="mt-3 text-[13px] leading-6 text-muted-foreground">
                   先点「新会话」选择本地工作区，再输入编程任务。密钥只存在于启动 GUI 的终端环境变量中。
                 </p>
                 {!settings.workspace ? (
-                  <p className="mt-3 text-sm text-amber-400">尚未选择工作区。</p>
+                  <p className="mt-3 text-[13px] text-amber-400/90">尚未选择工作区。</p>
                 ) : null}
                 {!hasKey ? (
-                  <p className="mt-3 text-sm text-amber-400">当前进程未检测到 FORGE_API_KEY。</p>
+                  <p className="mt-3 text-[13px] text-amber-400/90">当前进程未检测到 FORGE_API_KEY。</p>
                 ) : null}
               </div>
             ) : (
-              <div className="space-y-4 pb-4">
+              <div className="space-y-5 pb-4">
                 {blocks.map((block, index) => {
                   if (block.type === "user") {
                     return (
                       <div key={`u-${index}`} className="flex justify-end">
-                        <div className="max-w-[85%] rounded-2xl bg-white/10 px-3.5 py-2 text-[13.5px] leading-6">
+                        <div className="max-w-[78%] rounded-md bg-white/[0.08] px-3 py-2 text-[15px] leading-7">
                           {block.text}
                         </div>
                       </div>
@@ -1580,11 +1583,11 @@ export default function App() {
                   if (block.type === "assistant") {
                     return (
                       <div key={`a-${index}`} className="flex justify-start">
-                        <div className="max-w-[92%] rounded-2xl border border-border bg-white/[0.04] px-3.5 py-2">
+                        <div className="max-w-[92%]">
                           <div className="prose-forge">
                             <Markdown remarkPlugins={[remarkGfm]}>{block.text}</Markdown>
                             {block.streaming ? (
-                              <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-primary/80" />
+                              <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-primary/80" />
                             ) : null}
                           </div>
                         </div>
@@ -1605,7 +1608,8 @@ export default function App() {
         </div>
 
         {approval ? (
-          <div className="mx-auto mb-2 flex w-full max-w-[720px] items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+          <div className="px-4">
+          <div className="mx-auto mb-2 flex w-full max-w-[720px] items-start gap-3 rounded-md bg-amber-500/[0.08] px-3 py-2">
             <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-400" />
             <div className="min-w-0 flex-1">
               <div className="text-[13px]">
@@ -1678,14 +1682,15 @@ export default function App() {
               </div>
             </div>
           </div>
+          </div>
         ) : null}
 
-        {error ? <div className="mx-auto mb-2 w-full max-w-[720px] text-[12.5px] text-red-400">{error}</div> : null}
+        {error ? <div className="mx-auto mb-2 w-full max-w-[720px] px-4 text-[12.5px] text-red-400">{error}</div> : null}
         {running && liveHint ? (
-          <div className="mx-auto mb-2 w-full max-w-[720px] text-[12.5px] text-muted-foreground">{liveHint}</div>
+          <div className="mx-auto mb-2 w-full max-w-[720px] px-4 text-[12.5px] text-muted-foreground">{liveHint}</div>
         ) : null}
 
-        <form onSubmit={(event) => void submit(event)} className="px-4 pb-4">
+        <form onSubmit={(event) => void submit(event)} className="border-t border-white/[0.06] px-4 pb-3 pt-2">
           <input
             ref={attachInputRef}
             type="file"
@@ -1699,8 +1704,8 @@ export default function App() {
           />
           <div
             className={cn(
-              "mx-auto max-w-[720px] rounded-2xl border bg-[#1a1a1a] p-2 shadow-[0_8px_30px_rgba(0,0,0,.25)]",
-              dropActive ? "border-primary" : "border-border",
+              "mx-auto max-w-[720px] rounded-md bg-white/[0.03] px-1.5 py-1 transition-shadow duration-150",
+              dropActive && "bg-primary/[0.05] ring-1 ring-primary/50",
             )}
             onDragEnter={onComposerDragEnter}
             onDragOver={onComposerDragOver}
@@ -1712,7 +1717,7 @@ export default function App() {
                 {chatRefs.map((ref) => (
                   <span
                     key={ref.id}
-                    className="flex max-w-full items-center gap-1 rounded-full border border-border bg-white/5 px-2 py-0.5 text-[11px]"
+                    className="flex max-w-full items-center gap-1 rounded-md bg-white/[0.06] px-2 py-0.5 text-[11px]"
                   >
                     <span className="flex items-center gap-1 truncate">
                       {ref.kind === "image" && ref.preview ? (
@@ -1841,7 +1846,7 @@ export default function App() {
   const inspectorPane = (
       <aside
         ref={inspectorBox}
-        className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#121212]"
+        className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-inspector"
         style={{ width: layout.inspector }}
       >
         <InspectorWorkspace
@@ -1866,13 +1871,15 @@ export default function App() {
               <SplitHandle onMove={moveTree} />
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {tabs.length > 0 ? (
-                  <div className="flex shrink-0 overflow-x-auto border-b border-border">
+                  <div className="flex shrink-0 overflow-x-auto border-b border-white/[0.06]">
                     {tabs.map((doc) => (
                       <div
                         key={doc.path}
                         className={cn(
-                          "flex max-w-[240px] items-center border-r border-border",
-                          activePath === doc.path && "bg-white/10",
+                          "flex max-w-[240px] items-center border-b-2 -mb-px transition-colors duration-150",
+                          activePath === doc.path
+                            ? "border-foreground/70 text-foreground"
+                            : "border-transparent text-muted-foreground hover:text-foreground",
                         )}
                       >
                         <button
@@ -1932,7 +1939,7 @@ export default function App() {
                         </Button>
                       </div>
                     ) : null}
-                    <div className="flex items-center gap-2 border-b border-border px-2 py-1 text-[12px]">
+                    <div className="flex items-center gap-2 border-b border-white/[0.06] px-2 py-1 text-[12px]">
                       <span className="min-w-0 flex-1 truncate">
                         {openFile.path}
                         {dirty ? <span className="ml-1 text-amber-400">●</span> : null}
@@ -1961,13 +1968,13 @@ export default function App() {
                       </Button>
                     </div>
                     {openFile.missing ? (
-                      <p className="border-b border-border px-3 py-2 text-[12px] text-red-300/90">
+                      <p className="border-b border-white/[0.06] px-3 py-2 text-[12px] text-red-300/90">
                         文件已被 Agent 删除。接受将保持删除；撤销可恢复到删除前。
                       </p>
                     ) : null}
                     {openFile.image && openFile.content.startsWith("data:") ? (
                       <div className="min-h-0 flex-1 overflow-auto p-3">
-                        <img src={openFile.content} alt={openFile.path} className="max-w-full rounded border border-border" />
+                        <img src={openFile.content} alt={openFile.path} className="max-w-full rounded-md" />
                       </div>
                     ) : openFile.binary ? (
                       <p className="p-3 text-[12px] text-muted-foreground">二进制文件无法在此编辑。</p>
@@ -2041,7 +2048,7 @@ export default function App() {
             </div>
             );
             return (
-              <div className="h-full min-h-0 min-w-0 flex-1 bg-[#0c0c0c]">
+              <div className="h-full min-h-0 min-w-0 flex-1 bg-background">
                 <WorkspaceTerminal workspace={settings.workspace} sessionId={page.id} />
               </div>
             );
@@ -2073,9 +2080,9 @@ export default function App() {
       )}
 
       {paletteOpen ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-24" onClick={() => setPaletteOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-24" onClick={() => setPaletteOpen(false)}>
           <div
-            className="w-[480px] rounded-xl border border-border bg-[#161616] p-2"
+            className="w-[480px] rounded-lg bg-popover p-2 ring-1 ring-white/[0.08]"
             onClick={(event) => event.stopPropagation()}
           >
             <input
@@ -2083,7 +2090,7 @@ export default function App() {
               value={paletteQuery}
               onChange={(event) => setPaletteQuery(event.target.value)}
               placeholder={paletteMode === "insert" ? "选择文件插入提问" : "搜索工作区文件"}
-              className="h-9 w-full rounded-md border border-border bg-transparent px-3 text-[13px] outline-none"
+              className="h-9 w-full bg-transparent px-3 text-[13px] outline-none"
               onKeyDown={(event) => {
                 if (event.key === "Escape") setPaletteOpen(false);
                 if (event.key === "Enter" && paletteFiles[0]) {
@@ -2114,9 +2121,9 @@ export default function App() {
       ) : null}
 
       {settingsOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setSettingsOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55" onClick={() => setSettingsOpen(false)}>
           <div
-            className="w-[480px] rounded-xl border border-border bg-[#161616] p-4 shadow-xl"
+            className="w-[480px] rounded-lg bg-popover p-4 ring-1 ring-white/[0.08]"
             onClick={(event) => event.stopPropagation()}
           >
             <h2 className="mb-3 text-sm font-semibold">{selectedId ? "当前会话设置" : "新会话设置"}</h2>
@@ -2126,7 +2133,7 @@ export default function App() {
                 <input
                   value={settings.workspace}
                   readOnly
-                  className="h-8 min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 text-[13px]"
+                  className="h-8 min-w-0 flex-1 rounded-md bg-white/[0.04] px-2 text-[13px]"
                 />
                 <Button
                   type="button"
@@ -2144,7 +2151,7 @@ export default function App() {
               <input
                 value={settings.model}
                 onChange={(event) => setSettings({ ...settings, model: event.target.value })}
-                className="mt-1 h-8 w-full rounded-md border border-border bg-transparent px-2 text-[13px]"
+                className="mt-1 h-8 w-full rounded-md bg-white/[0.04] px-2 text-[13px]"
               />
             </label>
             <label className="mb-2 block text-[12px] text-muted-foreground">
@@ -2152,7 +2159,7 @@ export default function App() {
               <input
                 value={settings.verify}
                 onChange={(event) => setSettings({ ...settings, verify: event.target.value })}
-                className="mt-1 h-8 w-full rounded-md border border-border bg-transparent px-2 text-[13px]"
+                className="mt-1 h-8 w-full rounded-md bg-white/[0.04] px-2 text-[13px]"
               />
             </label>
             <div className="mb-2 grid grid-cols-3 gap-2">
@@ -2162,7 +2169,7 @@ export default function App() {
                   type="number"
                   value={settings.max_steps}
                   onChange={(event) => setSettings({ ...settings, max_steps: Number(event.target.value) })}
-                  className="mt-1 h-8 w-full rounded-md border border-border bg-transparent px-2 text-[13px]"
+                  className="mt-1 h-8 w-full rounded-md bg-white/[0.04] px-2 text-[13px]"
                 />
               </label>
               <label className="text-[12px] text-muted-foreground">
@@ -2171,7 +2178,7 @@ export default function App() {
                   type="number"
                   value={settings.max_tokens}
                   onChange={(event) => setSettings({ ...settings, max_tokens: Number(event.target.value) })}
-                  className="mt-1 h-8 w-full rounded-md border border-border bg-transparent px-2 text-[13px]"
+                  className="mt-1 h-8 w-full rounded-md bg-white/[0.04] px-2 text-[13px]"
                 />
               </label>
               <label className="text-[12px] text-muted-foreground">
@@ -2179,7 +2186,7 @@ export default function App() {
                 <input
                   value={settings.max_cost}
                   onChange={(event) => setSettings({ ...settings, max_cost: event.target.value })}
-                  className="mt-1 h-8 w-full rounded-md border border-border bg-transparent px-2 text-[13px]"
+                  className="mt-1 h-8 w-full rounded-md bg-white/[0.04] px-2 text-[13px]"
                 />
               </label>
             </div>

@@ -147,14 +147,14 @@ export function GitPanel({
             type="button"
             disabled={busy || branchNodes.length === 0}
             onClick={() => setBranchOpen((value) => !value)}
-            className="flex h-7 max-w-[160px] items-center gap-1 rounded-md border border-border px-2 text-[12px] hover:bg-white/5 disabled:opacity-50"
+            className="flex h-7 max-w-[160px] items-center gap-1 rounded-md bg-white/[0.05] px-2 text-[12px] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50"
           >
             <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-left">{state.branch || "选择分支"}</span>
             <ChevronDown className={cn("h-3 w-3 shrink-0 text-muted-foreground", branchOpen && "rotate-180")} />
           </button>
           {branchOpen ? (
-            <div className="absolute right-0 z-30 mt-1 min-w-[200px] overflow-hidden rounded-md border border-border bg-[#1a1a1a] py-1 shadow-xl">
+            <div className="absolute right-0 z-30 mt-1 min-w-[200px] overflow-hidden rounded-md bg-popover py-1 ring-1 ring-white/[0.08]">
               {branchNodes.map((node) => (
                 <button
                   key={node.name}
@@ -189,7 +189,7 @@ export function GitPanel({
           value={remoteUrl}
           onChange={(event) => setRemoteUrl(event.target.value)}
           placeholder="https://github.com/用户名/仓库名.git"
-          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 text-[12px] outline-none"
+          className="h-7 min-w-0 flex-1 rounded-md bg-white/[0.04] px-2 text-[12px] outline-none"
         />
         <Button
           size="sm"
@@ -222,7 +222,7 @@ export function GitPanel({
           value={branchName}
           onChange={(event) => setBranchName(event.target.value)}
           placeholder={state.branch ? `从 ${state.branch} 再分一条，例如 2` : "新分支名"}
-          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 text-[12px] outline-none"
+          className="h-7 min-w-0 flex-1 rounded-md bg-white/[0.04] px-2 text-[12px] outline-none"
         />
         <Button
           size="sm"
@@ -245,7 +245,7 @@ export function GitPanel({
         onChange={(event) => setMessage(event.target.value)}
         rows={3}
         placeholder="例如：登录功能可以跑了，准备让智能体改样式"
-        className="mb-2 w-full resize-none rounded-md border border-border bg-transparent px-2 py-1.5 text-[12px] outline-none"
+        className="mb-2 w-full resize-none rounded-md bg-white/[0.04] px-2 py-1.5 text-[12px] outline-none"
       />
       <Button
         size="sm"
@@ -287,7 +287,7 @@ export function GitPanel({
         ) : (
           <ul className="space-y-2">
             {state.commits.map((commit) => (
-              <li key={commit.sha} className="rounded-md border border-white/[0.06] bg-white/[0.02] px-2 py-2">
+              <li key={commit.sha} className="rounded-md bg-white/[0.03] px-2 py-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium">{commit.message}</p>

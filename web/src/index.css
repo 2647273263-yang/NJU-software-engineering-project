@@ -3,23 +3,28 @@
 @tailwind utilities;
 
 :root {
-  --background: 0 0% 8%;
-  --foreground: 0 0% 93%;
-  --card: 0 0% 10%;
-  --card-foreground: 0 0% 93%;
-  --primary: 217 91% 70%;
-  --primary-foreground: 0 0% 8%;
-  --secondary: 0 0% 14%;
-  --secondary-foreground: 0 0% 86%;
-  --muted: 0 0% 14%;
-  --muted-foreground: 0 0% 55%;
-  --accent: 0 0% 16%;
-  --accent-foreground: 0 0% 93%;
+  --background: 222 12% 7%;
+  --foreground: 220 14% 93%;
+  --card: 222 10% 9%;
+  --card-foreground: 220 14% 93%;
+  --popover: 222 10% 13%;
+  --popover-foreground: 220 14% 93%;
+  --primary: 222 45% 62%;
+  --primary-foreground: 222 20% 10%;
+  --secondary: 222 10% 14%;
+  --secondary-foreground: 220 12% 86%;
+  --muted: 222 10% 13%;
+  --muted-foreground: 220 8% 60%;
+  --accent: 222 10% 16%;
+  --accent-foreground: 220 14% 93%;
   --destructive: 0 72% 61%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 18%;
-  --input: 0 0% 18%;
-  --ring: 217 91% 70%;
+  --border: 222 8% 16%;
+  --input: 222 8% 16%;
+  --ring: 222 45% 62%;
+  --sidebar: 222 12% 6%;
+  --inspector: 222 10% 8%;
+  --surface: 222 10% 10%;
 }
 
 html,
@@ -31,19 +36,20 @@ body,
 
 body {
   @apply bg-background text-foreground antialiased;
-  font-family: "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+  font-family: "Segoe UI Variable", "Segoe UI", Inter, ui-sans-serif, system-ui, sans-serif;
   font-size: 13px;
+  letter-spacing: 0.01em;
   overflow: hidden;
 }
 
 .prose-forge {
-  @apply text-[13.5px] leading-6 text-foreground;
+  @apply text-[15px] leading-7 text-foreground;
 }
 
 .prose-forge h1,
 .prose-forge h2,
 .prose-forge h3 {
-  @apply font-semibold text-foreground mt-4 mb-2;
+  @apply font-semibold text-foreground mt-4 mb-2 tracking-tight;
 }
 
 .prose-forge h1 {
@@ -68,11 +74,11 @@ body {
 }
 
 .prose-forge code {
-  @apply rounded bg-white/10 px-1 py-0.5 text-[12.5px];
+  @apply rounded-sm bg-white/[0.07] px-1 py-0.5 text-[13px];
 }
 
 .prose-forge pre {
-  @apply my-3 overflow-x-auto rounded-lg border border-border bg-black/30 p-3 text-[12.5px];
+  @apply my-3 overflow-x-auto rounded-md bg-black/25 p-3 text-[13px];
 }
 
 .prose-forge pre code {
@@ -84,8 +90,8 @@ body {
 }
 
 select option {
-  background-color: #1f1f1f;
-  color: #ececec;
+  background-color: hsl(var(--popover));
+  color: hsl(var(--foreground));
 }
 
 .diff-line-add {
@@ -96,6 +102,10 @@ select option {
 .diff-line-del {
   background: rgba(248, 81, 73, 0.16);
   color: #ff7b72;
+}
+
+.workspace-terminal {
+  background: #101218;
 }
 
 .workspace-terminal .xterm {
@@ -115,12 +125,12 @@ select option {
 
 .code-input {
   color: transparent;
-  caret-color: #ececec;
+  caret-color: hsl(var(--foreground));
   tab-size: 4;
 }
 
 .code-input::selection {
-  background: rgba(88, 166, 255, 0.28);
+  background: hsla(222, 55%, 58%, 0.28);
   color: transparent;
 }
 
@@ -155,6 +165,10 @@ select option {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(0 0% 24%);
+  background: hsl(222 8% 22%);
   border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(222 8% 28%);
 }

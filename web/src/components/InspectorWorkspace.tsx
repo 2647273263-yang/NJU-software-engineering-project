@@ -110,7 +110,7 @@ function TabStrip({
 }) {
   return (
     <div
-      className="flex h-8 shrink-0 items-center gap-0.5 border-b border-white/[0.06] bg-[#121212] px-1"
+      className="flex h-8 shrink-0 items-center gap-0.5 border-b border-white/[0.06] bg-inspector px-1"
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
@@ -132,13 +132,15 @@ function TabStrip({
                 onDragStart(page.id);
               }}
               className={cn(
-                "group flex h-6 max-w-[260px] shrink-0 items-center rounded-md pl-1.5 pr-0.5",
-                selected ? "bg-white/[0.08] text-foreground" : "text-muted-foreground hover:bg-white/[0.04]",
+                "group flex h-8 max-w-[260px] shrink-0 items-center border-b-2 -mb-px pl-1.5 pr-0.5 transition-colors duration-150",
+                selected
+                  ? "border-foreground/70 text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
               )}
             >
               <button
                 type="button"
-                className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px]"
+                className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] tracking-wide"
                 onClick={() => onSelect(page.id)}
               >
                 <Icon className="h-3 w-3 shrink-0 opacity-70" />
@@ -311,7 +313,7 @@ export const InspectorWorkspace = forwardRef<
       </button>
       {menuOpen ? (
         <div
-          className="absolute top-full left-0 z-30 mt-1 w-44 overflow-hidden rounded-lg border border-border bg-[#1a1a1a] py-1 shadow-xl"
+          className="absolute top-full left-0 z-30 mt-1 w-44 overflow-hidden rounded-md bg-popover py-1 ring-1 ring-white/[0.08]"
           onClick={(event) => event.stopPropagation()}
         >
           {PANEL_OPTIONS.map((item) => {

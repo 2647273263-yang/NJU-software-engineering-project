@@ -91,12 +91,12 @@ export function FileTree({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-1 border-b border-border px-1 py-1">
+      <div className="flex items-center gap-1 border-b border-white/[0.06] px-1 py-1">
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="筛选文件"
-          className="h-7 min-w-0 flex-1 rounded border border-border bg-transparent px-2 text-[12px] outline-none"
+          className="h-7 min-w-0 flex-1 bg-transparent px-2 text-[12px] outline-none"
         />
         <Button type="button" size="icon" variant="ghost" title="新建文件" onClick={() => beginCreate("", "file")}>
           <Plus className="h-3.5 w-3.5" />
@@ -105,7 +105,7 @@ export function FileTree({
           <FolderPlus className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto py-1 text-[12.5px]">
+      <div className="min-h-0 flex-1 overflow-y-auto py-1 text-[12px]">
         {creating && creating.parent === "" ? (
           <CreatingRow kind={creating.kind} depth={0} onCommit={commitCreate} onCancel={() => setCreating(null)} />
         ) : null}
@@ -164,7 +164,7 @@ export function FileTree({
       </div>
       {menu ? (
         <div
-          className="fixed z-50 min-w-[132px] rounded-md border border-border bg-[#1f1f1f] py-1 text-[12px] shadow-lg"
+          className="fixed z-50 min-w-[132px] rounded-md bg-popover py-1 text-[12px] ring-1 ring-white/[0.08]"
           style={{ left: menu.x, top: menu.y }}
           onClick={(event) => event.stopPropagation()}
         >
@@ -343,8 +343,8 @@ function TreeRow({
   return (
     <div
       className={cn(
-        "group flex w-full items-center rounded px-1 py-0.5 hover:bg-white/5",
-        active && "bg-primary/15 text-primary",
+        "group flex w-full items-center rounded-sm px-1 py-0.5 transition-colors duration-150 hover:bg-white/[0.04]",
+        active && "bg-white/[0.07]",
         changed && !active && "text-emerald-400",
       )}
       style={{ paddingLeft: pad }}
@@ -362,7 +362,7 @@ function TreeRow({
         <input
           autoFocus
           defaultValue={label}
-          className="h-5 min-w-0 flex-1 rounded border border-border bg-[#1a1a1a] px-1 text-[12px] outline-none"
+          className="h-5 min-w-0 flex-1 rounded-sm bg-white/[0.06] px-1 text-[12px] outline-none"
           onClick={(event) => event.stopPropagation()}
           onBlur={(event) => {
             if (event.currentTarget.dataset.skip === "1") return;
@@ -431,7 +431,7 @@ function CreatingRow({
       <input
         autoFocus
         placeholder={kind === "dir" ? "文件夹名" : "文件名"}
-        className="h-6 w-full rounded border border-border bg-[#1a1a1a] px-1 text-[12px] outline-none"
+        className="h-6 w-full rounded-sm bg-white/[0.06] px-1 text-[12px] outline-none"
         onBlur={(event) => {
           if (event.currentTarget.dataset.skip === "1") return;
           onCommit(event.currentTarget.value);

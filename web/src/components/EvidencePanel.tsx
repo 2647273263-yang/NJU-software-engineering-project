@@ -25,62 +25,62 @@ function outcome(claim: ClaimRow): {
   if (kinds.includes("file_change")) {
     return {
       label: "文件已写入",
-      className: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",
+      className: "bg-emerald-500/10 text-emerald-300",
       Icon: FileDiff,
     };
   }
   if (kinds.includes("command") && claim.status === "proven") {
     return {
       label: "检查通过",
-      className: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",
+      className: "bg-emerald-500/10 text-emerald-300",
       Icon: CheckCircle2,
     };
   }
   if (kinds.includes("command") && claim.status === "unproven") {
     return {
       label: "检查没过",
-      className: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+      className: "bg-amber-500/10 text-amber-300",
       Icon: CircleAlert,
     };
   }
   if (kinds.includes("missing_verification")) {
     return {
       label: "还没跑检查",
-      className: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+      className: "bg-amber-500/10 text-amber-300",
       Icon: ShieldQuestion,
     };
   }
   if (kinds.includes("failure") && kinds.includes("recovery")) {
     return {
       label: "后来测通了",
-      className: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",
+      className: "bg-emerald-500/10 text-emerald-300",
       Icon: CheckCircle2,
     };
   }
   if (kinds.includes("git_status")) {
     return {
       label: "还有未提交改动",
-      className: "border-white/10 bg-white/5 text-muted-foreground",
+      className: "bg-white/5 text-muted-foreground",
       Icon: GitBranch,
     };
   }
   if (claim.status === "unverifiable") {
     return {
       label: "没法用命令证明",
-      className: "border-white/10 bg-white/5 text-muted-foreground",
+      className: "bg-white/5 text-muted-foreground",
       Icon: CircleHelp,
     };
   }
   if (claim.status === "proven") {
     return {
       label: "有实际记录",
-      className: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",
+      className: "bg-emerald-500/10 text-emerald-300",
       Icon: CheckCircle2,
     };
   }
   return {
     label: "还对不上",
-    className: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+    className: "bg-amber-500/10 text-amber-300",
     Icon: CircleAlert,
   };
 }
@@ -156,7 +156,7 @@ export function EvidencePanel({ claims }: { claims: ClaimRow[] }) {
         </p>
       </div>
       {visible.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[12px] text-muted-foreground">
+        <p className="px-1 py-6 text-center text-[12px] text-muted-foreground">
           还没有本轮记录。等 Agent 改完文件或跑完检查，会显示在这里。
         </p>
       ) : (
@@ -170,12 +170,12 @@ export function EvidencePanel({ claims }: { claims: ClaimRow[] }) {
             return (
               <section
                 key={`${claim.statement}-${index}`}
-                className="rounded-lg border border-border bg-[#161616] px-3 py-2.5"
+                className="rounded-md bg-white/[0.03] px-3 py-2.5"
               >
                 <div className="flex items-start gap-2">
                   <span
                     className={cn(
-                      "mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                      "mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px]",
                       meta.className,
                     )}
                   >

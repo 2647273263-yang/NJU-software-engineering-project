@@ -87,7 +87,7 @@ function FindBar({
   onClose: () => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-1">
+    <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.06] px-2 py-1">
       <input
         autoFocus
         value={query}
@@ -100,7 +100,7 @@ function FindBar({
           }
           if (event.key === "Escape") onClose();
         }}
-        className="h-7 min-w-[8rem] flex-1 rounded border border-border bg-transparent px-2 text-[12px] outline-none"
+        className="h-7 min-w-[8rem] flex-1 rounded-md bg-white/[0.04] px-2 text-[12px] outline-none"
       />
       <input
         value={replace}
@@ -113,7 +113,7 @@ function FindBar({
           }
           if (event.key === "Escape") onClose();
         }}
-        className="h-7 min-w-[8rem] flex-1 rounded border border-border bg-transparent px-2 text-[12px] outline-none"
+        className="h-7 min-w-[8rem] flex-1 rounded-md bg-white/[0.04] px-2 text-[12px] outline-none"
       />
       <span className="shrink-0 text-[11px] text-muted-foreground">
         {matchCount ? `${matchIndex + 1}/${matchCount}` : "无匹配"}
@@ -315,7 +315,7 @@ export function CodeEditor({
 
   const ask =
     selection && onAskSelection ? (
-      <div className="flex items-center gap-2 border-b border-border bg-primary/10 px-2 py-1 text-[12px]">
+      <div className="flex items-center gap-2 border-b border-white/[0.06] bg-primary/10 px-2 py-1 text-[12px]">
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
           已选 {selection.startLine === selection.endLine
             ? `第 ${selection.startLine} 行`
@@ -354,7 +354,7 @@ export function CodeEditor({
         <div className="flex min-h-0 flex-1 overflow-hidden font-mono text-[12px] leading-5">
           <div
             ref={gutter}
-            className="shrink-0 overflow-hidden border-r border-white/5 bg-[#121212] py-2 pr-2 text-right text-muted-foreground"
+            className="shrink-0 overflow-hidden border-r border-white/[0.06] bg-transparent py-2 pr-2 text-right text-muted-foreground"
             style={{ width: gutterWidth }}
           >
             {lines.map((_, index) => (

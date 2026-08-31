@@ -37,6 +37,40 @@ def test_tool_titles_use_file_and_command_names() -> None:
     )
     assert started.title == "修改 app.py"
     assert finished.title == "运行 pytest -q 完成"
+
+
+def test_spawn_explore_titles_are_plain_chinese() -> None:
+    started = event_to_view(
+        event("tool_started", {"name": "spawn_explore", "arguments": {"task": "find sort"}})
+    )
+    finished = event_to_view(
+        event(
+            "tool_finished",
+            {
+                "name": "spawn_explore",
+                "ok": True,
+                "summary": "sort is in heap_sort.py",
+                "arguments": {"task": "find sort"},
+            },
+        )
+    )
+    nested = event_to_view(
+        event(
+            "tool_started",
+            {"name": "read_file", "source": "subagent", "arguments": {"path": "heap_sort.py"}},
+        )
+    )
+    thought = event_to_view(
+        event(
+            "model_response",
+            {"source": "subagent", "text": "I read two files.", "tool_calls": 0},
+        )
+    )
+    assert started.title == "摸仓库结构"
+    assert finished.title == "子任务已得出结论"
+    assert nested.title == "子任务 · 读取 heap_sort.py"
+    assert thought.process is True
+    assert thought.answer is False
     view = event_to_view(
         event(
             "tool_finished",

@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from forge_agent.agent import AgentLoop
-from forge_agent.agent.loop import repair_tool_history
 from forge_agent.agent.evidence import EvidenceLedger
+from forge_agent.agent.loop import repair_tool_history
 from forge_agent.agent.plan_gate import uses_readonly_plan, wants_plan_first
+from forge_agent.agent.subagent import register_spawn_explore, run_explore
 from forge_agent.agent.tool_runtime import PersistentToolRuntime
 from forge_agent.application.approval import ApprovalBroker
 from forge_agent.application.events import EventBus
@@ -33,6 +34,7 @@ from forge_agent.safety import PolicyDecision, PolicyEngine, PolicyToolRuntime, 
 from forge_agent.storage import SQLiteStorage
 from forge_agent.tools import build_default_registry
 from forge_agent.tools.git import collect_workspace_summary
+from forge_agent.tools.schemas import SpawnExploreArgs
 from forge_agent.types import (
     AgentStatus,
     Message,
@@ -271,6 +273,22 @@ class SessionService:
                 max_output_chars=config.max_tool_output_chars,
                 suggested_verification=list(discovered.verification_commands),
             )
+
+            async def spawn_explore(args: SpawnExploreArgs) -> ToolResult:
+                return await run_explore(
+                    parent=config,
+                    model_factory=self.model_factory,
+                    task=args.task,
+                    tools=args.tools,
+                    model=args.model,
+                    max_steps=args.max_steps,
+                    on_event=on_event,
+                    parent_registry=registry,
+                    project_context=discovered.render(config.verify_command),
+                    user_rules=load_user_rules(config.workspace, config.extra_rules),
+                )
+
+            register_spawn_explore(registry, spawn_explore)
             policy_runtime = PolicyToolRuntime(
                 registry,
                 PolicyEngine(

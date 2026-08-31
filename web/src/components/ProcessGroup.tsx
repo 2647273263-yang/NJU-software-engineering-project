@@ -34,7 +34,7 @@ export function ProcessGroup({ items, openDefault }: { items: TimelineView[]; op
   const [open, setOpen] = useState(openDefault);
   const visible = visibleProcessItems(items);
   const current = visible[visible.length - 1];
-  const headlines = visible
+    const headlines = visible
     .filter(
       (item) =>
         item.kind === "tool_finished" ||
@@ -42,6 +42,7 @@ export function ProcessGroup({ items, openDefault }: { items: TimelineView[]; op
         item.kind === "judge_finished" ||
         item.kind === "hook_denied",
     )
+    .filter((item) => !item.title.startsWith("子任务 ·"))
     .map((item) => item.title);
   const summary =
     current?.kind === "approval_requested"
@@ -51,7 +52,9 @@ export function ProcessGroup({ items, openDefault }: { items: TimelineView[]; op
       : current?.kind === "hook_denied"
         ? current.title
         : current?.kind === "tool_started"
-          ? `正在${current.title}…`
+          ? current.title === "摸仓库结构" || current.title.startsWith("子任务")
+            ? "正在摸仓库…"
+            : `正在${current.title}…`
           : headlines.length > 0
             ? headlines.slice(0, 3).join(" · ") + (headlines.length > 3 ? ` 等 ${headlines.length} 项` : "")
             : `${visible.length} 个步骤`;

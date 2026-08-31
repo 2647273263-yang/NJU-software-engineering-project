@@ -46,9 +46,12 @@ def event_to_view(
         )
     if event.kind == "tool_started":
         name = str(payload.get("name", "tool"))
+        title = _tool_title(name, payload, started=True)
+        if payload.get("source") == "subagent":
+            title = f"子任务 · {title}"
         return TimelineItem(
             event.kind,
-            _tool_title(name, payload, started=True),
+            title,
             "进行中",
             "active",
             process=True,
@@ -122,9 +125,12 @@ def event_to_view(
             and content
             else None
         )
+        title = _tool_title(name, payload, started=False, ok=ok)
+        if payload.get("source") == "subagent":
+            title = f"子任务 · {title}"
         return TimelineItem(
             event.kind,
-            _tool_title(name, payload, started=False, ok=ok),
+            title,
             detail,
             "success" if ok else "danger",
             diff=diff,
@@ -134,6 +140,18 @@ def event_to_view(
     if event.kind == "model_response":
         text = str(payload.get("text") or "").strip()
         tool_calls = int(payload.get("tool_calls") or 0)
+        if payload.get("source") == "subagent":
+            return TimelineItem(
+                event.kind,
+                "子任务思考",
+                (
+                    text[:500]
+                    if text
+                    else f"{payload.get('tokens', 0)} Token · {tool_calls} 个工具调用"
+                ),
+                "info",
+                process=True,
+            )
         if text:
             return TimelineItem(
                 event.kind,
@@ -460,8 +478,11 @@ def _tool_title(name: str, payload: dict[str, Any], *, started: bool, ok: bool =
         "undo_last_edit": "撤销编辑",
         "rollback_changes": "回滚本轮修改",
         "repo_outline": "查看仓库结构",
+        "spawn_explore": "摸仓库结构",
     }
     base = labels.get(name, name.replace("_", " "))
+    if name == "spawn_explore" and not started:
+        return "子任务已得出结论" if ok else "子任务没有结论"
     if started:
         return base
     return f"{base}{' 完成' if ok else ' 失败'}"

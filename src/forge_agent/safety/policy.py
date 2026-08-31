@@ -13,6 +13,7 @@ from forge_agent.types import RunMode
 READ_ONLY_TOOLS = frozenset(
     {"read_file", "list_files", "search_text", "git_diff", "git_status", "repo_outline"}
 )
+SPAWN_EXPLORE = "spawn_explore"
 PARALLEL_READ_LIMIT = 4
 
 
@@ -130,6 +131,8 @@ class PolicyEngine:
             return RiskLevel.MEDIUM, "workspace content modification"
         if tool_name == "run_command":
             return self._classify_command(str(arguments.get("command", "")))
+        if tool_name == SPAWN_EXPLORE:
+            return RiskLevel.LOW, "isolated read-only exploration"
         return RiskLevel.HIGH, "unknown tool is treated conservatively"
 
     def _classify_command(

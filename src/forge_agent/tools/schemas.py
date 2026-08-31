@@ -95,3 +95,10 @@ class RepoOutlineArgs(ToolArguments):
     max_chars: int = Field(default=12_000, ge=200, le=50_000)
     query: str | None = None
     task: str | None = None
+
+
+class SpawnExploreArgs(ToolArguments):
+    task: str = Field(min_length=1, max_length=2_000)
+    tools: list[str] | None = None
+    model: str | None = None
+    max_steps: int = Field(default=8, ge=1, le=8)

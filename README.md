@@ -37,6 +37,9 @@ error handling, persistence, and evidence-based completion are implemented in th
   wrappers) and commands that read secrets (`.env`, SSH keys) or copy files out of the
   workspace. Those commands never run and never prompt for approval. Disable with
   `.forge/hooks.json`: `{"block_dangerous_bash": false}` or `{"block_secret_shell": false}`.
+- `spawn_explore` runs a depth-1 read-only sub-loop for repository surveys. The parent only
+  receives a short conclusion and paths read; the child cannot write files, run commands, or
+  spawn another explorer.
 - Automatic verification after edits when a preferred or inferred command is available.
 - Local React chat UI (shadcn-style) served by FastAPI, with live WebSocket events, unified diff,
   verification evidence, context compaction, session resume, cancellation, and non-blocking approval.

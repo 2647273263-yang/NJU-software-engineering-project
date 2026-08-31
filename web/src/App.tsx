@@ -146,7 +146,7 @@ function looksLikeModelDump(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("```json")) return true;
-  return /"name"\s*:\s*"(?:read_file|write_file|replace_in_file|delete_file|run_command|search_text|list_files)"/.test(
+  return /"name"\s*:\s*"(?:read_file|write_file|replace_in_file|delete_file|run_command|search_text|list_files|spawn_explore)"/.test(
     trimmed,
   );
 }
@@ -408,7 +408,10 @@ export default function App() {
       if (view.kind === "approval_requested") return view.title;
       if (view.kind === "judge_started") return "评判器正在验收…";
       if (view.kind === "hook_denied" || view.title.startsWith("已拦住")) return view.title;
-      if (view.kind === "tool_started") return `正在${view.title}…`;
+      if (view.kind === "tool_started") {
+        if (view.title === "摸仓库结构" || view.title.startsWith("子任务")) return "正在摸仓库…";
+        return `正在${view.title}…`;
+      }
       if (
         view.kind === "tool_finished" ||
         view.kind === "model_response" ||

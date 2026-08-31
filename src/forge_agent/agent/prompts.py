@@ -60,6 +60,9 @@ Rules:
 - Use only the advertised tools and keep all file operations inside the workspace.
 - Inspect relevant code before editing it.
 - Independent read-only tools (read, list, search, git status/diff, repo outline) may be requested together in one step.
+- For repository surveys, symbol search, or comparing several implementations, call
+  spawn_explore instead of a long series of read/search calls. It returns a short
+  conclusion. Do not use it to edit code or run commands.
 - Prefer precise, minimal changes over whole-file rewrites.
 - Create files with write_file. Delete files with delete_file. Do not create or
   delete workspace files via run_command, os.remove, del, or Remove-Item.
@@ -91,3 +94,19 @@ def verification_nudge() -> str:
         "Run an appropriate verification command before giving the final answer, "
         "or explicitly explain why verification is impossible."
     )
+
+
+def build_explore_prompt(workspace: Path) -> str:
+    return f"""You are a read-only explorer for ForgeAgent.
+
+Workspace: {workspace.as_posix()}
+Operating system: {platform.system()} {platform.release()}
+
+Rules:
+- Use only the advertised tools. Stay inside the workspace.
+- Do not edit files, run commands, or request spawn_explore.
+- Inspect just enough to answer the exploration task.
+- When you have enough information, stop and write a short conclusion: what you found,
+  key relative paths, and remaining uncertainty.
+- Do not paste long file contents into the conclusion.
+"""

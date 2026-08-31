@@ -11,6 +11,7 @@ from forge_agent.agent.completion import CompletionJudge
 from forge_agent.agent.llm_judge import is_complex_coding_stop
 from forge_agent.agent.plan_gate import uses_readonly_plan, wants_plan_first
 from forge_agent.agent.prompts import (
+    build_explore_prompt,
     build_system_prompt,
     implement_approved_plan,
     verification_nudge,
@@ -24,6 +25,7 @@ from forge_agent.model.base import ContextOverflowError, ModelClient, ModelError
 from forge_agent.safety.policy import (
     PARALLEL_READ_LIMIT,
     READ_ONLY_TOOLS,
+    SPAWN_EXPLORE,
     is_verification_command,
 )
 from forge_agent.types import (
@@ -36,6 +38,10 @@ from forge_agent.types import (
     ToolResult,
     VerificationRecord,
 )
+
+
+def _is_plan_safe(name: str) -> bool:
+    return name in READ_ONLY_TOOLS or name == SPAWN_EXPLORE
 
 
 class ToolRuntime(Protocol):
@@ -132,6 +138,7 @@ class AgentLoop:
         on_mode_change: ModeChangeCallback | None = None,
         verification_commands: list[str] | None = None,
         hooks: HookRunner | None = None,
+        explore: bool = False,
     ) -> None:
         self.config = config
         self.model = model
@@ -147,6 +154,7 @@ class AgentLoop:
             model,
             on_event=self.on_event,
         )
+        self._explore = explore
         self._task = ""
         self.verification_commands = list(
             dict.fromkeys(
@@ -170,36 +178,29 @@ class AgentLoop:
         self.state.set_status(AgentStatus.INITIALIZING)
         self.state.begin_run()
         self._task = task
-        self._plan_gate = wants_plan_first(task, mode=self.config.mode)
+        self._plan_gate = False if self._explore else wants_plan_first(task, mode=self.config.mode)
         self._plan_resolved = False
         prompt_mode = (
             RunMode.PLAN
             if uses_readonly_plan(task, mode=self.config.mode)
             else self.config.mode
         )
+        system_text = (
+            build_explore_prompt(self.config.workspace)
+            if self._explore
+            else build_system_prompt(
+                self.config.workspace,
+                prompt_mode,
+                plan_then_build=self._plan_gate,
+            )
+        )
         if history is None:
             self.messages = []
-            self._append_message(
-                Message(
-                    role="system",
-                    content=build_system_prompt(
-                        self.config.workspace,
-                        prompt_mode,
-                        plan_then_build=self._plan_gate,
-                    ),
-                )
-            )
+            self._append_message(Message(role="system", content=system_text))
             self._append_message(self._user_turn(task))
         else:
             self.messages = list(history)
-            current_system = Message(
-                role="system",
-                content=build_system_prompt(
-                    self.config.workspace,
-                    prompt_mode,
-                    plan_then_build=self._plan_gate,
-                ),
-            )
+            current_system = Message(role="system", content=system_text)
             if self.messages and self.messages[0].role == "system":
                 self.messages[0] = current_system
             else:
@@ -343,7 +344,7 @@ class AgentLoop:
                         self.on_event("verification_required", {"step": self.state.steps})
                         continue
                     self._append_message(Message(role="assistant", content=response.text))
-                    if decision.accepted:
+                    if decision.accepted and not self._explore:
                         blocked = await self._apply_stop_hooks(response.text or "")
                         if blocked:
                             continue
@@ -394,8 +395,8 @@ class AgentLoop:
         return None
 
     async def _handle_plan_pass_calls(self, response: ModelResponse) -> RunResult | None:
-        readonly = [call for call in response.tool_calls if call.name in READ_ONLY_TOOLS]
-        premature = [call for call in response.tool_calls if call.name not in READ_ONLY_TOOLS]
+        readonly = [call for call in response.tool_calls if _is_plan_safe(call.name)]
+        premature = [call for call in response.tool_calls if not _is_plan_safe(call.name)]
         if readonly:
             self._append_message(
                 Message(
@@ -688,6 +689,10 @@ class AgentLoop:
         self.on_message(message)
 
     def _apply_tool_metadata(self, call: ToolCall, result: ToolResult) -> bool:
+        if call.name == SPAWN_EXPLORE:
+            self.state.total_tokens += int(result.metadata.get("total_tokens") or 0)
+            self.state.total_cost_usd += float(result.metadata.get("total_cost_usd") or 0)
+            self.state.model_calls += int(result.metadata.get("model_calls") or 0)
         changed = result.metadata.get("changed_files", [])
         if isinstance(changed, list) and all(isinstance(item, str) for item in changed):
             self.state.record_changes(changed)

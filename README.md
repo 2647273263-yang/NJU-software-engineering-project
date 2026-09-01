@@ -231,7 +231,7 @@ shortens only the active context; persisted records are not deleted.
 ForgeAgent uses defense in depth:
 
 - All file paths are resolved against the workspace.
-- Parent traversal, absolute paths, and resolved symlink escapes are rejected.
+- Parent traversal, paths that resolve outside the workspace, and symlink escapes are rejected. Absolute paths are allowed only when they stay inside the workspace.
 - Plan mode disables mutating tools.
 - Medium-risk operations require approval.
 - Destructive commands, direct `.git` writes, Git pushes, and history rewriting are denied.

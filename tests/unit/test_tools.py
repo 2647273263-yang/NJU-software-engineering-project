@@ -20,11 +20,15 @@ def test_sandbox_rejects_parent_absolute_and_symlink_escape(tmp_path: Path) -> N
     workspace.mkdir()
     outside.mkdir()
     sandbox = WorkspaceSandbox(workspace)
+    inside = workspace / "bubble_sort.py"
+    inside.write_text("ok\n", encoding="utf-8")
 
     with pytest.raises(WorkspaceViolation):
         sandbox.resolve("../outside")
     with pytest.raises(WorkspaceViolation):
         sandbox.resolve(outside)
+    assert sandbox.resolve(inside) == inside.resolve()
+    assert sandbox.resolve(str(inside)) == inside.resolve()
 
     link = workspace / "link"
     try:
@@ -33,6 +37,22 @@ def test_sandbox_rejects_parent_absolute_and_symlink_escape(tmp_path: Path) -> N
         pytest.skip("creating symlinks is not permitted on this system")
     with pytest.raises(WorkspaceViolation):
         sandbox.resolve("link/new.txt")
+
+
+@pytest.mark.asyncio
+async def test_read_file_accepts_absolute_path_inside_workspace(tmp_path: Path) -> None:
+    (tmp_path / "bubble_sort.py").write_text("def sort():\n    return 1\n", encoding="utf-8")
+    registry = build_default_registry(tmp_path)
+    relative = await registry.call("read_file", {"path": "bubble_sort.py"})
+    absolute = await registry.call("read_file", {"path": str(tmp_path / "bubble_sort.py")})
+    escaped = await registry.call("read_file", {"path": str(tmp_path.parent / "outside.py")})
+
+    assert relative.ok
+    assert absolute.ok
+    assert absolute.content == relative.content
+    assert not escaped.ok
+    assert escaped.error_code == "WorkspaceViolation"
+    assert "absolute paths are not allowed" not in (escaped.summary or "")
 
 
 def test_sensitive_read_reason_blocks_secrets_but_allows_examples() -> None:

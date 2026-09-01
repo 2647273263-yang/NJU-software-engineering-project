@@ -63,6 +63,8 @@ ALLOWED_TRANSITIONS: dict[AgentStatus, frozenset[AgentStatus]] = {
     AgentStatus.VERIFYING: frozenset(
         {
             AgentStatus.THINKING,
+            AgentStatus.EXECUTING_TOOL,
+            AgentStatus.AWAITING_APPROVAL,
             AgentStatus.DEBUGGING,
             AgentStatus.COMPLETED,
             AgentStatus.FAILED,

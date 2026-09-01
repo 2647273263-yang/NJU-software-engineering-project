@@ -26,13 +26,13 @@ class WorkspaceSandbox:
             raise ValueError(f"workspace is not a directory: {self.root}")
 
     def resolve(self, path: str | Path, *, must_exist: bool = False) -> Path:
-        candidate = Path(path)
+        candidate = Path(os.fspath(path).strip())
         if candidate.is_absolute():
-            raise WorkspaceViolation("absolute paths are not allowed")
-        if any(part == ".." for part in candidate.parts):
-            raise WorkspaceViolation("parent path components are not allowed")
-
-        resolved = (self.root / candidate).resolve(strict=False)
+            resolved = candidate.expanduser().resolve(strict=False)
+        else:
+            if any(part == ".." for part in candidate.parts):
+                raise WorkspaceViolation("parent path components are not allowed")
+            resolved = (self.root / candidate).resolve(strict=False)
         try:
             resolved.relative_to(self.root)
         except ValueError as exc:

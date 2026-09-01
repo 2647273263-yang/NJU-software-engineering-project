@@ -24,6 +24,13 @@ def test_allows_documented_runtime_path() -> None:
     assert is_terminal(status)
 
 
+def test_allows_more_tools_after_successful_verification() -> None:
+    status = transition(AgentStatus.EXECUTING_TOOL, AgentStatus.VERIFYING)
+    status = transition(status, AgentStatus.EXECUTING_TOOL)
+    status = transition(status, AgentStatus.AWAITING_APPROVAL)
+    assert status is AgentStatus.AWAITING_APPROVAL
+
+
 def test_rejects_illegal_transition() -> None:
     assert not can_transition(AgentStatus.COMPLETED, AgentStatus.THINKING)
     try:

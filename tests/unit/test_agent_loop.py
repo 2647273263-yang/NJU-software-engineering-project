@@ -171,6 +171,53 @@ async def test_requires_verification_after_edit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_same_turn_tool_after_passing_verification_does_not_crash(
+    tmp_path: Path,
+) -> None:
+    model = FakeModel(
+        [
+            ModelResponse(tool_calls=[ToolCall(id="1", name="fake")]),
+            ModelResponse(
+                tool_calls=[
+                    ToolCall(id="2", name="verify_changes"),
+                    ToolCall(id="3", name="fake", arguments={"path": "app.py"}),
+                ]
+            ),
+            ModelResponse(text="Done after tests and a follow-up read"),
+        ]
+    )
+    tools = FakeTools(
+        [
+            ToolResult(
+                ok=True,
+                summary="edited",
+                metadata={"changed_files": ["app.py"]},
+            ),
+            ToolResult(
+                ok=True,
+                summary="verified",
+                metadata={
+                    "verification": {
+                        "command": "pytest",
+                        "exit_code": 0,
+                        "duration_ms": 10,
+                        "output": "1 passed",
+                    }
+                },
+            ),
+            ToolResult(ok=True, summary="read app.py"),
+        ]
+    )
+
+    result = await AgentLoop(config=config(tmp_path), model=model, tools=tools).run("fix")
+
+    assert result.status is AgentStatus.COMPLETED
+    assert result.verification is not None
+    assert result.verification.passed
+    assert [call.id for call in tools.calls] == ["1", "2", "3"]
+
+
+@pytest.mark.asyncio
 async def test_successful_python_script_run_counts_as_verification(tmp_path: Path) -> None:
     model = FakeModel(
         [

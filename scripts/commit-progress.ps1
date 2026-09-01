@@ -1,5 +1,5 @@
 # Periodic progress commit. Run from anywhere:
-#   powershell -File "D:\nanda project\forge-agent\scripts\commit-progress.ps1" -Message "gui: 调整核对页文案"
+#   powershell -File ".\scripts\commit-progress.ps1" -Message "describe this change"
 #
 # Add -Push after you have origin and GitHub login.
 # Never amend or force-push commits that are already on GitHub.

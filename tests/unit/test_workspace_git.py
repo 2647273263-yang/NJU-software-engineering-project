@@ -29,7 +29,7 @@ pytestmark = pytest.mark.skipif(resolve_git_executable() is None, reason="Git ex
 
 def test_git_checkpoint_branch_and_restore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_AUTHOR_NAME", "tester")
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "tester@example.com")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "tester@example.com")  # forge-release: allow
     workspace = tmp_path / "project"
     workspace.mkdir()
     (workspace / "app.py").write_text("v1\n", encoding="utf-8")
@@ -75,7 +75,7 @@ def test_git_checkpoint_branch_and_restore(tmp_path: Path, monkeypatch: pytest.M
 
 def test_gui_git_restore_requires_confirm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_AUTHOR_NAME", "tester")
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "tester@example.com")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "tester@example.com")  # forge-release: allow
     workspace = tmp_path / "project"
     workspace.mkdir()
     (workspace / "app.py").write_text("ok\n", encoding="utf-8")
@@ -107,7 +107,7 @@ def test_gui_git_restore_requires_confirm(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_git_github_remote_and_push_current_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_AUTHOR_NAME", "tester")
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "tester@example.com")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "tester@example.com")  # forge-release: allow
     workspace = tmp_path / "project"
     workspace.mkdir()
     (workspace / "app.py").write_text("ok\n", encoding="utf-8")
@@ -117,9 +117,9 @@ def test_git_github_remote_and_push_current_branch(tmp_path: Path, monkeypatch: 
         git_set_remote(workspace, "https://example.com/not-github.git")
     linked = git_set_remote(
         workspace,
-        "https://github.com/2647273263-yang/NJU-software-engineering-project",
+        "https://github.com/example/demo-project",
     )
-    assert linked["remote_url"].endswith("NJU-software-engineering-project.git")
+    assert linked["remote_url"].endswith("demo-project.git")
 
     git = resolve_git_executable()
     assert git is not None

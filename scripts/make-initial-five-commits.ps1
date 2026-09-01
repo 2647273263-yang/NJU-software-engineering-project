@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-. "D:\nanda project\forge-agent\scripts\forge-git.ps1"
+. (Join-Path $PSScriptRoot "forge-git.ps1")
 
 function Commit-Slice([string]$MessageFile) {
     Invoke-ForgeGit commit -F $MessageFile

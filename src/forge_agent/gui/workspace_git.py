@@ -292,7 +292,7 @@ def _validate_branch(name: str) -> str:
 def _identity(git: str, workspace: Path) -> tuple[str, str]:
     name = os.environ.get("GIT_AUTHOR_NAME", "").strip() or _config(git, workspace, "user.name")
     email = os.environ.get("GIT_AUTHOR_EMAIL", "").strip() or _config(git, workspace, "user.email")
-    return name or "ForgeAgent", email or "forge-agent@users.noreply.github.com"
+    return name or "ForgeAgent", email or "forge-agent@users.noreply.github.com"  # forge-release: allow
 
 
 def _config(git: str, workspace: Path, key: str) -> str:
@@ -496,7 +496,7 @@ def _validate_github_url(url: str) -> str:
     text = url.strip()
     if not text or text.startswith("-"):
         raise GitWorkspaceError("请填写 GitHub 仓库地址")
-    if "@" in text.replace("git@github.com:", "", 1) and "://" in text:
+    if "@" in text.replace("git@github.com:", "", 1) and "://" in text:  # forge-release: allow
         raise GitWorkspaceError("不要把账号或令牌写进地址里")
     https = re.fullmatch(
         r"https://github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/([A-Za-z0-9._-]+?)(?:\.git)?/?",

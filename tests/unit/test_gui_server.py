@@ -304,12 +304,12 @@ def test_upload_accepts_text_and_rejects_secrets_and_binaries(tmp_path: Path) ->
     assert saved.read_text(encoding="utf-8") == "timeout after 3s\n"
     assert (tmp_path / ".forge-uploads" / ".gitignore").read_text(encoding="utf-8") == "*\n"
 
-    secret = save_uploaded_file(tmp_path, ".env", payload(b"SECRET=1\n"))
+    secret = save_uploaded_file(tmp_path, ".env", payload(b"SECRET=1\n"))  # forge-release: allow
     assert secret["ok"] is False
     assert secret["error_code"] == "sensitive"
     assert not list((tmp_path / ".forge-uploads").glob("*env*"))
 
-    key = save_uploaded_file(tmp_path, "id_rsa", payload(b"-----BEGIN OPENSSH PRIVATE KEY-----\n"))
+    key = save_uploaded_file(tmp_path, "id_rsa", payload(b"-----BEGIN OPENSSH PRIVATE KEY-----\n"))  # forge-release: allow
     assert key["ok"] is False
     assert key["error_code"] == "sensitive"
 

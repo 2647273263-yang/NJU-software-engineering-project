@@ -387,7 +387,7 @@ def test_match_secret_or_escape_command_catches_secrets_not_tests(tmp_path: Path
     assert match_secret_or_escape_command("Get-Content .env", workspace) == ".env"
     assert match_secret_or_escape_command("cat ~/.ssh/id_rsa", workspace) == "credential directory"
     assert match_secret_or_escape_command(
-        r"copy readme.txt C:\Users\someone\Desktop\stolen.txt",
+        r"copy readme.txt C:\Users\someone\Desktop\stolen.txt",  # forge-release: allow
         workspace,
     ) in {"path outside workspace", "copy outside workspace"}
     assert (
@@ -401,7 +401,7 @@ def test_match_secret_or_escape_command_catches_secrets_not_tests(tmp_path: Path
     assert match_secret_or_escape_command("python -m pytest -q", workspace) is None
     assert match_secret_or_escape_command("$env:PATH", workspace) is None
     python_in_home = (
-        r"C:\Users\lenovo\AppData\Local\Programs\Python\Python312\python.exe -m pytest"
+        r"C:\Users\someone\AppData\Local\Programs\Python\Python312\python.exe -m pytest"  # forge-release: allow
     )
     assert match_secret_or_escape_command(python_in_home, workspace) is None
     inside = workspace / "script.py"
@@ -456,7 +456,7 @@ async def test_before_tool_blocks_copy_outside_workspace(tmp_path: Path) -> None
                             id="1",
                             name="run_command",
                             arguments={
-                                "command": r"copy readme.txt C:\Users\someone\Desktop\out.txt",
+                                "command": r"copy readme.txt C:\Users\someone\Desktop\out.txt",  # forge-release: allow
                             },
                         )
                     ]

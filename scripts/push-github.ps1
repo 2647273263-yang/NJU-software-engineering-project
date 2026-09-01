@@ -4,9 +4,9 @@
 # 1) Create repo on github.com, copy the URL.
 # 2) Set identity for this repo only (optional, overrides defaults):
 #      $env:GIT_AUTHOR_NAME = "YourName"
-#      $env:GIT_AUTHOR_EMAIL = "you@users.noreply.github.com"
+#      $env:GIT_AUTHOR_EMAIL = "you@users.noreply.github.com"  # forge-release: allow
 # 3) Run:
-#      powershell -File "D:\nanda project\forge-agent\scripts\push-github.ps1" -Remote "https://github.com/你的用户名/仓库名.git"
+#      powershell -File ".\scripts\push-github.ps1" -Remote "https://github.com/your-user/your-repo.git"
 #
 # After the first successful push, do not rebase/amend/force-push that history.
 

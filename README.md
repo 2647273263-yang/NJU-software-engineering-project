@@ -1,107 +1,171 @@
 # ForgeAgent
 
-This repository is the Nanjing University School of Software postgraduate-recommendation interview project (`NJU-software-engineering-project`).
+本机编程智能体，从零实现，未使用 LangChain、AutoGen 等 Agent 框架，也不把代码交到云端执行。
 
-ForgeAgent is a small, inspectable local coding agent implemented from scratch. It communicates
-with an OpenAI-compatible model, lets the model call locally executed structured tools, and runs
-an explicit model → action → observation loop until the task is completed or a deterministic
-limit is reached.
+模型只负责选下一步。文件能不能改、这一轮算不算完成、这一步危不危险，由项目里的确定性代码决定。
 
-No agent framework or server-hosted file/code-execution service is used. The agent loop, model
-response parsing, tool registry, workspace safety, context budgeting, compaction, termination,
-error handling, persistence, and evidence-based completion are implemented in this repository.
+产品边界需要先说清楚：这不是操作系统沙箱，不是多智能体平台，没有大规模仓库成功率数字。子任务只读、深度为 1，不能写文件。图形界面是演示面；内核可以在没有浏览器时用命令行和 FakeModel 测完。
 
-## Features
+## 它怎么运转
 
-- Provider-neutral model interface with OpenAI-compatible tool calling.
-- Workspace-scoped, line-numbered file reading, ignored-path-aware search, and repository outline.
-- Atomic writes, SHA-256 conflict checks, persistent snapshots, unified diff, and cross-restart undo.
-- Independent local command execution with timeout, process-tree cleanup, exit codes, and bounded
-  output. Interactive programs and long-running services are refused instead of hanging.
-- Plan mode that advertises only read-only tools and can continue in Build mode after approval.
-- Explainable command risk classification and interactive approval, including session-scoped
-  remembered approvals.
-- Four-layer context: stable instructions, optional user rules, project context, compacted memory, and recent verbatim
-  history.
-- Deterministic token estimation and structured context compaction.
-- SQLite WAL storage for messages, events, compactions, edit transactions, claims, and evidence.
-- Session resume, no-side-effect trajectory replay with optional `--speed`, and redacted JSONL
-  export.
-- Pre-publication scanning for secrets, identity paths, databases, environment files, and PDFs.
-- Evidence-backed completion: verification results are valid only for the latest workspace
-  version. Failed verification becomes a structured debug hypothesis and is retired after two
-  identical experiments.
-- For complex coding tasks, a type:prompt stop hook starts an independent LLM Judge after
-  `CompletionJudge` accepts. The inspector can block stopping at most twice per run.
-- A `before_tool` hook blocks destructive shell such as `rm -rf` (including `sudo` / `bash -c`
-  wrappers) and commands that read secrets (`.env`, SSH keys) or copy files out of the
-  workspace. Those commands never run and never prompt for approval. Disable with
-  `.forge/hooks.json`: `{"block_dangerous_bash": false}` or `{"block_secret_shell": false}`.
-- `spawn_explore` runs a depth-1 read-only sub-loop for repository surveys. The parent only
-  receives a short conclusion and paths read; the child cannot write files, run commands, or
-  spawn another explorer.
-- Automatic verification after edits when a preferred or inferred command is available.
-- Local React chat UI (shadcn-style) served by FastAPI, with live WebSocket events, unified diff,
-  verification evidence, context compaction, session resume, cancellation, and non-blocking approval.
-- Offline `forge eval` with FakeModel and AgentLoop sample cases.
-- Deterministic `FakeModel` for offline tests.
+用户给出一句编程任务。模型通过 OpenAI 兼容的 tool calling 选择读文件、改文件或跑命令。真正改磁盘、起进程、判断能不能停，全部在本地完成。
 
-## Requirements
+循环是显式的「模型 → 工具 → 观察 → 再决定」，直到完成、失败、取消，或碰到步数、调用次数、Token、费用上限。有工具调用的那一轮不算完成：必须等工具跑完，再给出不含 tool_calls 的最终文字，才会进入完成判定，避免一边改文件一边宣布成功。
 
-- Python 3.12 or newer.
-- An OpenAI-compatible chat-completions endpoint that supports native function/tool calling.
-- PowerShell on Windows or a POSIX shell on Linux/macOS.
-- Git is optional; `git_diff` and `git_status` report a normal tool error when Git is unavailable.
+只读工具（读文件、列目录、搜文本、Git 状态/差异、仓库地图）可以在同一轮最多并行 4 个。只要混进写入、命令、验证或子任务，整轮改为串行，以免快照、哈希和完成信号互相打乱。
 
-## Installation
+## 总体架构
 
-Create and activate an isolated virtual environment:
+```text
+用户（GUI / CLI）
+  → SessionService（会话、取消、审批、事件）
+  → AgentLoop（模型 → 工具 → 观察）
+       上下文：系统提示、附加规则、记忆、压缩摘要、近期原文
+       模型：OpenAI 兼容 tool calling
+       Hook：执行前硬拒绝；结束前可走评判器
+       策略：工作区边界、是否要人点允许
+       工具：读改搜、命令、验证、Git、只读子任务
+       完成判定：最新改动有没有检查通过
+  → SQLite 记过程
+  → 界面画步骤、差异、验收
+```
+
+循环不直接依赖某一家 SDK，只认 `ModelClient`，因此可以用 FakeModel 离线把循环跑通。工具不由循环直接调用原始函数，而是先经注册表校验参数，再经策略分级，再经持久化层留下编辑快照。任何一层失败都变成观察返回给模型，而不是把进程打崩。
+
+## 对话历史与上下文
+
+不要把下面三层说成同一件事。
+
+1. **完整历史**：每个会话对应本地 SQLite 里的消息和事件，不删。压缩发生时，磁盘上的原文仍在。
+2. **发给模型的窗口**：由运行时按预算裁剪。工具输出过长会两头保留、中间截断。固定前缀依次是：每轮重写的系统提示、项目说明、附加规则、跨会话记忆、结构化压缩摘要、近期原文。上下文溢出时强制再压缩一次，仍溢出则失败。
+3. **跨会话记忆**：写在工作区 `.forge/memory.jsonl`，不走 `write_file`，也不进更改横栏。对话结束后抽取偏好、规范、踩坑；新会话注入相关条目，并声明不能授权越权或跳过验证。
+
+系统提示每轮按 Plan / Agent 权限整段重写，避免上一轮的只读口吻残留。附加规则是另一条消息：本会话优先，留空则读 `.forge/rules.md`，不能用来授权出工作区或 `git push`。
+
+中断、停止或审批被拒时，若历史里缺了对应的 tool 回复，会补一条「未记录结果、不要假设成功」的占位，以免下一轮请求被接口拒绝。
+
+压缩摘要解决的是「这一次对话太长」；跨会话记忆解决的是「下次还想要同一条仓库约定」。
+
+## 工具与本地执行
+
+每个工具有名字、说明、Pydantic 参数表和处理函数。参数校验失败或未知工具名会作为观察返回，错误能回到对应的调用 ID。
+
+| 工具 | 作用 |
+| --- | --- |
+| `read_file` | 带行号读取；密钥类路径默认不可读 |
+| `list_files` / `search_text` | 列目录、搜文本；搜索优先用 ripgrep |
+| `repo_outline` | 轻量仓库地图，避免把整库塞进上下文 |
+| `replace_in_file` | 默认只改唯一匹配的一处，可带内容哈希 |
+| `write_file` / `delete_file` | 新建或删除；禁止用 shell 偷偷建删 |
+| `run_command` | 独立子进程，有超时和输出上限 |
+| `verify_changes` | 跑检查，结果绑定当前工作区版本 |
+| `git_diff` / `git_status` | 只读；没有 commit、push、rebase |
+| `undo_last_edit` / `rollback_changes` | 按快照撤回最近一次或一组未验证改动 |
+| `spawn_explore` | 只读子循环，见下方特色 |
+
+路径解析后必须落在工作区内。相对路径中的 `..` 会被拒绝；绝对路径只有解析后仍在工作区根目录内才允许，符号链接按真实目标判断。这是路径围栏，不是容器。
+
+命令不是持久 shell：每条命令起一个进程，跑完就退出，退出码可靠，超时可杀进程树。代价是 `cd` 和 `export` 不会留到下一条。界面右侧终端是给人用的另一个进程，不跟智能体命令混成一个会话。
+
+改文件前会留下快照和哈希。撤销时若磁盘内容已经对不上记录，就拒绝覆盖，以免冲掉后来的手改。验证通过后打检查点，整组回滚只作用在检查点之后的未验证改动。
+
+风险分为低、中、高。只读和探索子任务为低；改文件为中；破坏性命令为高。高风险直接不允许。中风险在未自动批准时要人点允许。Plan 模式下写入类不允许。图形界面把写入类合成一次授权：本轮点一次「允许写文件」即可。测试类检查默认不必再批。Hook 已经拒绝的调用不会弹出批准。
+
+## 模型输出如何解析
+
+内部消息序列化为 Chat Completions。带图时走图文混合内容；工具参数保留原始 JSON 字符串，避免二次编码。响应只取第一条 choice。参数解析失败时留下空对象和原始字符串，由校验层变成观察，而不是在适配器里崩溃。
+
+错误归一后：鉴权失败不重试；限流、超时、服务端错误有限次退避。上下文超长会触发压缩再请求，而不是把超长错误原文当成最终答案。SDK 自带重试关掉，重试策略留在项目里，行为可测。
+
+不采用「让模型在 Markdown 里写工具代码块」的私有协议。原生 tool calling 的代价是依赖兼容接口，所以用适配器隔离供应商，评测用 FakeModel 直接给出工具调用。
+
+## 循环何时停止
+
+终止分三类，不要混成一件事。
+
+**预算用尽（STOPPED）**：步数、模型调用、Token、费用上限；同一工具同一参数连打三次；同一种失败检查重复且没有新证据。这些是保护，不是任务成功。
+
+**证据完成**：最终文字出现时，不看模型口头说得好不好听。本轮没改文件可以结束（分析类任务）。改过文件则必须有针对**当前工作区版本**且退出码为零的检查，否则不准停。旧测试通过不能为新补丁背书。过不了时会先尝试自动跑配置的检查命令，再不行就催模型去验证，催促只发一次。
+
+**评判器（第二道）**：检查通过后，复杂改代码还会对照用户原话。未完成则拦住并继续，每轮最多两次。不替代测试退出码。测试失败时走不到这一层。
+
+**Plan**：只读，给出目标、可行性、实现建议后即停。用户确认后再换成 Agent 权限去实现。Agent 模式按当前这句话：只要分析就停；要改代码则改完再验证。
+
+**失败与取消**：连续两次空响应、不可重试的模型错误、压缩后仍溢出，记为失败。用户点停止会保存会话、补工具占位并清理进程树。取消不是崩溃。
+
+## 错误处理
+
+能变成观察的，不要变成崩溃；能变成预算停止的，不要死循环。
+
+工具参数错误、路径越界、唯一匹配失败、Hook 拒绝、命令超时，都作为观察返回。历史缺工具回复则补占位。同一失败检查记成调试假设，满两次停止，避免对着同一条红测试无脑重跑。界面失败后可以重发上一句，会话仍在本地。
+
+## 特色功能
+
+**证据驱动完成。** 编程智能体最常见的撒谎是「我已经修好了」。完成条件写成提示词会被忽略，所以必须是代码里的谓词：有没有改动、有没有绑定当前版本的退出码。验收页只写这些事实。
+
+**评判器。** 退出码只能说明「你跑的那条命令过了」，不能说明用户列的几件事都做了。复杂任务在检查通过后再对照原话；最多拦两次，防止两个模型无限抬杠。
+
+**按模式重写系统提示。** 权限是运行时状态。Plan 与 Agent 的差别出现在每一轮提示里，并由策略再挡一层。只靠提示词，模型仍可能在 Plan 里请求写文件。
+
+**跨会话记忆。** 压缩解决窗口长度；记忆解决下次会话的仓库约定。主循环不会用写文件工具去写记忆，以免记忆进更改横栏、被当成一次改动，或写入密钥。
+
+**Hook。** `rm -rf`、读 `.env` 或私钥、把文件拷出工作区，在点允许之前就拒绝，不会真执行，也不会弹出批准。命令分类是保守的正则，不是形式化沙箱。
+
+**只读子任务。** 摸陌生仓库时，主循环连打十几次读取会撑满窗口。`spawn_explore` 开一个空历史的子循环，最多 8 步，只有只读工具，不能再派。主对话只收回截断结论。系统不会自动派；模型也可能改用 `list_files`。现场没出现子任务，不代表功能没做。
+
+**Plan / Agent。** 有人只要方案，有人要直接改，有人要先说再动手。没有斜杠命令。目标写在方案三段里，压缩摘要也有 goal 字段，那是给模型的备忘。
+
+**可恢复的改动。** 改前快照、按文件撤销、编辑器按块撤回、版本页保存或恢复。智能体不能自己提交或推送。
+
+**透明上下文。** 界面可看系统、规则、记忆、摘要、近期原文和工具说明各占多少。压缩如果是黑盒，就无法解释模型为什么忘了刚才的失败。占用是估算，不是供应商账单。
+
+## 图形界面
+
+界面不另写一套循环，只订事件。三栏：会话、对话、检查器。
+
+写文件本轮批准一次；测试默认免批。可贴图、拖入工作区外的文件（先拷进工作区再读，不进更改横栏）、用路径或选中代码提问。横栏只列真正写入或删除的文件。文件树可搜索、新建、改名、删除。编辑器可按块撤回。可开终端。检查器含验收、上下文、记忆、版本。会话可导出导入；失败后可重发上一句。停止会取消当前模型请求或命令，并清理进程树。
+
+密钥只来自启动该界面的终端环境变量，不会出现在表单或浏览器状态里。服务只监听本机。
+
+## 刻意不做
+
+- 不用 Agent 框架：终止和证据必须是可单测的函数。
+- 不做容器：先保证独立进程的超时和回收可测。
+- 不做会写文件的子任务、不做再派生，避免完成信号串台。
+- 不做向量检索，避免把问题做成另一套检索系统。
+- 不做语言服务索引、后台长任务、多模型路由。
+- 不公布真实仓库成功率；有的是 FakeModel 集成测试。
+
+## 运行
+
+需要 Python 3.12 或更新，以及支持原生 tool calling 的 OpenAI 兼容接口。
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-```
 
-Linux/macOS:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev]"
-```
-
-Set credentials through environment variables. Never place real values in `.env.example`, source
-code, logs, screenshots, or commits.
-
-```powershell
 $env:FORGE_API_KEY = "..."
 $env:FORGE_BASE_URL = "https://your-compatible-endpoint/v1"
 $env:FORGE_MODEL = "your-model"
-```
 
-`FORGE_BASE_URL` is optional when using the client's default endpoint.
-
-## Usage
-
-### Graphical interface
-
-Start the dashboard:
-
-```powershell
 forge-gui
 ```
 
-Open `http://127.0.0.1:8080` if the browser does not open automatically. The server binds only to
-the loopback interface. The API key remains in the process environment and is never placed in a
-form or browser state.
+浏览器打开 `http://127.0.0.1:8080`。工作区在界面里选择，与终端当前目录无关。`FORGE_BASE_URL` 在使用供应商默认地址时可省略。不要把真实密钥写入仓库、截图或本文件。
 
-The left sidebar lists sessions. The center column is a chat: your task, tool steps, and the
-model's final answer. The right panels show unified diffs, version-matched verification evidence,
-and context compaction. Medium-risk operations pause without blocking the web server until Allow
-or Reject is selected. Stop cancels the active model call or command and cleans up its process tree.
+命令行同样可用：
 
-To rebuild the frontend after changing files under `web/`:
+```powershell
+forge run "Fix the failing unit test and verify the change."
+forge run --mode plan "Inspect the authentication flow and propose a plan."
+forge doctor
+forge eval
+```
+
+`forge sessions` / `inspect` / `resume` / `replay` / `rollback` 用于查看和恢复本地轨迹。`forge release-check .` 在公开前扫描密钥、身份路径、数据库和环境文件。
+
+修改 `web/` 后需要重新构建前端：
 
 ```powershell
 cd web
@@ -109,142 +173,9 @@ npm install
 npm run build
 ```
 
-Then restart `forge-gui`. Frontend development can use `npm run dev` in `web/` while `forge-gui`
-is already running on port 8080.
+然后重启 `forge-gui`。
 
-Demo mode is off by default. Enable it in settings to redact the workspace path and
-credential-like values from event details. It changes presentation only and never substitutes
-fake model results.
-
-### Command-line interface
-
-Run in a target repository:
-
-```powershell
-forge run "Fix the failing unit test and verify the change."
-```
-
-Specify another workspace and preferred verification command:
-
-```powershell
-forge run `
-  --workspace D:\demo\sample-project `
-  --verify "python -m pytest -q" `
-  "Add input validation and tests."
-```
-
-Start in read-only plan mode:
-
-```powershell
-forge run --mode plan "Inspect the authentication flow and propose a refactoring plan."
-```
-
-Ask for approval and continue the same session in Build mode:
-
-```powershell
-forge run --mode plan --build-after-plan "Plan and implement input validation."
-```
-
-Medium-risk operations request approval by default. `--auto-approve` removes those prompts for
-controlled demonstrations, but high-risk operations remain denied.
-
-Inspect locally persisted trajectories:
-
-```powershell
-forge sessions
-forge inspect SESSION_ID
-forge resume SESSION_ID
-forge replay SESSION_ID
-forge replay SESSION_ID --speed 4
-forge rollback SESSION_ID
-```
-
-Run the offline FakeModel evaluation suite without network access:
-
-```powershell
-forge eval
-forge eval --output eval-report.json
-```
-
-Check the local environment without sending an API request:
-
-```powershell
-forge doctor
-```
-
-Export a redacted trajectory and scan before publication:
-
-```powershell
-forge export-events SESSION_ID run.jsonl
-forge release-check .
-```
-
-## Built-in tools
-
-- `read_file`: read a bounded line range with line numbers, binary detection, SHA-256, and a default deny list for `.env`, private keys, credential directories, and `.git` internals.
-- `list_files`: list visible workspace entries while respecting `.gitignore`.
-- `search_text`: use ripgrep when available and a bounded Python fallback otherwise.
-- `repo_outline`: summarize languages, key paths, tests, configuration, and Python symbols.
-- `replace_in_file`: replace a specified number of exact matches atomically (default: one unique match).
-- `write_file`: create or replace a file atomically with optional hash precondition.
-- `delete_file`: delete a UTF-8 workspace file; undo restores the previous contents.
-- `undo_last_edit`: restore the latest agent edit when no concurrent change is detected.
-- `run_command`: run a local command with timeout and bounded output.
-- `verify_changes`: run a test/lint/type/build command and record versioned evidence. The command
-  is optional when the project already has an inferred verification command.
-- `git_diff`: display staged or unstaged Git changes.
-- `git_status`: display porcelain status, untracked files, and insertion/deletion counts.
-- `rollback_changes`: restore the current unverified edit group.
-
-Every tool has a Pydantic argument model that becomes its JSON Schema. Unknown tools, invalid
-arguments, timeouts, path violations, and command failures are returned to the model as structured
-observations instead of crashing the process.
-
-## Architecture
-
-```text
-CLI / local React UI
-     |
-     v
-SessionService -- EventBus / ApprovalBroker
-     |
-     v
-AgentLoop ------ ContextBudget / RuntimeContext
-     |                    |
-     v                    v
-ModelClient          structured compaction
-     |
- tool_calls
-     v
-PolicyToolRuntime -- ToolRegistry -- local tools
-     |
- observations
-     v
-SQLite events + frontend renderer + completion evidence
-```
-
-The durable session history and model-visible context are deliberately separate. Compaction
-shortens only the active context; persisted records are not deleted.
-
-## Safety model
-
-ForgeAgent uses defense in depth:
-
-- All file paths are resolved against the workspace.
-- Parent traversal, paths that resolve outside the workspace, and symlink escapes are rejected. Absolute paths are allowed only when they stay inside the workspace.
-- Plan mode disables mutating tools.
-- Medium-risk operations require approval.
-- Destructive commands, direct `.git` writes, Git pushes, and history rewriting are denied.
-- Commands have time and output limits.
-- Logs and exported data can be passed through credential/path redaction helpers.
-
-These controls reduce risk but are not an operating-system sandbox. Run untrusted repositories in
-a container or restricted account. Review diffs before committing, and never allow the agent to
-publish changes automatically.
-
-## Verification
-
-Run the test and quality suite:
+## 测试
 
 ```powershell
 python -m pytest -q
@@ -252,33 +183,20 @@ python -m ruff check .
 python -m mypy src
 ```
 
-The integration suite uses `FakeModel` to deterministically reproduce:
+集成测试用 FakeModel 固定复现：读取 → 精确替换 → 本地验证 → 证据完成。不依赖真实接口。
 
-1. file inspection;
-2. a precise edit;
-3. local verification;
-4. evidence-backed completion.
+## 安全
 
-Tests do not require a real API key or network connection.
+纵深防御，不是系统沙箱：
 
-## Current limitations
+- 路径必须解析到工作区内；出界和符号链接逃逸拒绝。
+- Plan 模式关闭写入类工具。
+- 中风险要人点允许；高风险与 Hook 命中的危险命令直接拒绝。
+- 禁止直接改 `.git`、push 和改写历史。
+- 命令有时间和输出上限。
+- 导出轨迹可脱敏。
 
-- Only OpenAI-compatible chat completions are implemented.
-- Commands run on the host; container execution is not yet included.
-- The repository map is intentionally lightweight and does not implement a full AST reference
-  graph or PageRank.
-- Command classification is conservative pattern-based risk reduction, not full shell analysis.
-- Text files are currently expected to be UTF-8.
-- Long-running servers are refused rather than managed as background jobs.
-
-## Development principles
-
-- Keep the core loop explicit and small.
-- Prefer deterministic runtime checks over prompt-only promises.
-- Never treat model assertions as verification evidence.
-- Preserve original history even when compacting active context.
-- Fail closed on workspace boundaries and destructive actions.
-- Keep externally visible side effects under human control.
+不可信仓库应放在容器或受限账户中运行。智能体不能自动发布改动。
 
 ## License
 

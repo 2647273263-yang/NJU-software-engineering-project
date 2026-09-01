@@ -46,7 +46,7 @@ def match_secret_or_escape_command(
     root = workspace.expanduser().resolve() if workspace is not None else None
     tokens = _path_tokens(text)
     for token in tokens:
-        secret = _secret_reason(token)
+        secret = _secret_reason(token)  # forge-release: allow
         if secret is not None:
             return secret
         if _is_escape(token, root):

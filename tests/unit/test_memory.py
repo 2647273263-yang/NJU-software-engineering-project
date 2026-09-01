@@ -34,10 +34,10 @@ def _item(**overrides: object) -> MemoryItem:
 
 
 def test_sanitize_drops_secrets_and_absolute_paths(tmp_path: Path) -> None:
-    secret = sanitize_candidate(
+    secret = sanitize_candidate(  # forge-release: allow
         {
             "kind": "fact",
-            "text": "API key is sk-abcdefghijklmnopqrstuvwxyz",
+            "text": "API key is sk-abcdefghijklmnopqrstuvwxyz",  # forge-release: allow
             "tags": [],
         },
         workspace=tmp_path,
@@ -45,7 +45,7 @@ def test_sanitize_drops_secrets_and_absolute_paths(tmp_path: Path) -> None:
     path = sanitize_candidate(
         {
             "kind": "fact",
-            "text": r"The repo lives at C:\Users\someone\project",
+            "text": r"The repo lives at C:\Users\someone\project",  # forge-release: allow
             "tags": [],
         },
         workspace=tmp_path,
